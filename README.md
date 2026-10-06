@@ -55,6 +55,34 @@ a raw IP.
 
 `GET /api/token`, `POST /api/tool`, `POST /api/trace`, `GET /api/job/<id>`.
 
+## Slack
+
+The same dot, in text, when someone @mentions the bot in one channel. Socket
+Mode, so the host only connects out.
+
+```ts
+import { chat, memoryStore } from "@hevmind/dots/server";
+import { geminiChat } from "@hevmind/dots/gemini-live";
+import { slack } from "@hevmind/dots/slack";
+
+const store = memoryStore();
+await slack({
+  chat: chat({ dot, model: geminiChat({ apiKey }), store, surface: "slack" }),
+  store,
+  botToken, appToken,          // xoxb- and xapp- (connections:write)
+  channel: "C…",               // the only channel it answers in
+  users: { "U…": "you@example.com" },
+}).start();
+```
+
+A thread is a session: after the first mention, replies in the thread reach the
+dot without another mention. Every tool call goes through the same policy as the
+voice screen, so an act reads back in the thread and runs only on a yes from a
+mapped user. The persona gets `surface: "slack"` to adjust its style.
+
+The app needs Socket Mode, the `app_mention` and `message.groups` events, and the
+bot scopes `app_mentions:read`, `chat:write`, `groups:history` and `reactions:write`.
+
 ## Develop
 
 Node 22.18+ runs the TypeScript directly.

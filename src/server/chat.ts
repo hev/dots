@@ -1,0 +1,103 @@
+// A text turn loop over the same dot: same persona, same tools, same policy.
+// Text surfaces (Slack, later others) use this; the voice surface talks to the
+// speech provider directly. Every tool call goes through dot.invoke(), so an
+// act still needs a read-back and a matching yes, checked on the server.
+
+import type { Dot } from "./dot.ts";
+import type { ClientEvent } from "./traces.ts";
+import type { Ctx, Store, ToolDecl } from "./types.ts";
+
+export type Call = { id: string; name: string; args: Record<string, unknown> };
+
+export type Msg =
+  | { role: "user"; text: string }
+  | { role: "model"; text?: string; calls?: Call[] }
+  | { role: "tool"; results: { id: string; name: string; result: unknown }[] };
+
+/** A text model with function calling. */
+export type ChatModel = {
+  name: string;
+  turn(req: { system: string; history: Msg[]; tools: ToolDecl[] }): Promise<{ text?: string; calls?: Call[] }>;
+};
+
+export type ChatOptions = {
+  dot: Dot;
+  model: ChatModel;
+  store: Store;
+  surface: string;
+  /** Tool rounds per turn before giving up. */
+  maxSteps?: number;
+  /** History kept per session, in messages. */
+  keep?: number;
+};
+
+export type TurnHooks = {
+  /** A display tool's result (a link, a card), for the surface to show. */
+  onDisplay?(name: string, result: unknown): void | Promise<void>;
+  /** A slow tool started; the surface can say it's working. */
+  onSlow?(name: string): void | Promise<void>;
+};
+
+const POLL_MS = 1500;
+const SLOW_LIMIT_MS = 30 * 60_000;
+
+export function chat(o: ChatOptions) {
+  const maxSteps = o.maxSteps ?? 8;
+  const keep = o.keep ?? 40;
+
+  /** Run a slow tool to the end: the chat loop has no app to poll for it. */
+  async function finish(job: string): Promise<unknown> {
+    const t0 = Date.now();
+    while (Date.now() - t0 < SLOW_LIMIT_MS) {
+      const res = await o.dot.fetch(new Request(`http://dot/api/job/${job}`));
+      const j = (await res.json()) as { status: string; result?: unknown };
+      if (j.status === "done") return j.result;
+      await new Promise((r) => setTimeout(r, POLL_MS));
+    }
+    return { error: "the sub-agent didn't finish in 30 minutes" };
+  }
+
+  return {
+    /** One user message in, the dot's reply out. */
+    async turn(ctx: Ctx, text: string, hooks: TurnHooks = {}): Promise<string> {
+      const key = `chat:${o.surface}:${ctx.session}`;
+      const history = (((await o.store.get(key)) as Msg[] | undefined) ?? []).slice(-keep);
+      const trace: ClientEvent[] = [{ kind: "u", id: `${Date.now()}u`, ts: Date.now(), text }];
+      history.push({ role: "user", text });
+      const system = await o.dot.persona(ctx.barsafe, o.surface);
+
+      let reply = "";
+      for (let step = 0; step < maxSteps; step++) {
+        const out = await o.model.turn({ system, history, tools: o.dot.registry.decls });
+        history.push({ role: "model", text: out.text, calls: out.calls });
+        if (!out.calls?.length) {
+          reply = out.text ?? "";
+          break;
+        }
+        const results = [];
+        for (const c of out.calls) {
+          const t0 = Date.now();
+          const kind = o.dot.registry.kind(c.name);
+          let { body } = await o.dot.invoke(c.name, c.args, ctx);
+          if (kind === "slow" && body && typeof body === "object" && "job" in body) {
+            await hooks.onSlow?.(c.name);
+            body = await finish(String((body as { job: string }).job));
+          }
+          if (kind === "display" && !(body && typeof body === "object" && "error" in body)) {
+            await hooks.onDisplay?.(c.name, body);
+            body = { shown: true };
+          }
+          results.push({ id: c.id, name: c.name, result: body });
+          trace.push({ kind: "tool", id: c.id, ts: Date.now(), name: c.name, args: c.args, result: body, ms: Date.now() - t0 });
+        }
+        history.push({ role: "tool", results });
+      }
+      if (!reply) reply = "I went round in circles on that one. Ask me again, more narrowly?";
+
+      trace.push({ kind: "d", id: `${Date.now()}d`, ts: Date.now(), text: reply, model: o.model.name });
+      await o.store.put(key, history.slice(-keep), 7 * 24 * 3600);
+      await o.dot.trace(ctx.session, trace);
+      return reply;
+    },
+  };
+}

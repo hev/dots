@@ -11,6 +11,8 @@ export type PersonaInput = {
   capabilities: string;
   /** "Real is Codename; ..." for bar-safe mode. */
   codebook: string;
+  /** Where the dot is talking: "voice" on the site, or a text surface like "slack". */
+  surface: string;
 };
 
 export type DotOptions = {
@@ -33,9 +35,16 @@ export type DotOptions = {
   log?: (line: string) => void;
 };
 
+type Exec = { waitUntil(p: Promise<unknown>): void };
+
 export type Dot = {
-  fetch(req: Request, env?: unknown, exec?: { waitUntil(p: Promise<unknown>): void }): Promise<Response>;
+  fetch(req: Request, env?: unknown, exec?: Exec): Promise<Response>;
   registry: Registry;
+  /** One tool call through the whole policy: kinds, logins, receipts, redaction. Every surface goes through this. */
+  invoke(name: string, args: Record<string, unknown>, ctx: Ctx, exec?: Exec): Promise<{ status: number; body: unknown }>;
+  persona(barsafe: boolean, surface: string): Promise<string>;
+  /** Writes trace lines through the configured sink, secrets stripped. */
+  trace(session: string, events: ClientEvent[]): Promise<void>;
 };
 
 const json = (body: unknown, status = 200) =>
@@ -52,24 +61,31 @@ export async function defineDot(opts: DotOptions): Promise<Dot> {
   const who = async (req: Request) => (opts.identity ? await opts.identity(req) : null);
   const allowed = (w: string | null) => w !== null && logins.has(w);
 
+  const personaFor = async (barsafe: boolean, surface: string) =>
+    opts.persona({ barsafe, capabilities: tools.capabilities(), codebook: r.codebook(), surface });
+
   async function token(req: Request) {
     const barsafe = new URL(req.url).searchParams.get("safe") !== "0";
     if (!barsafe && !allowed(await who(req))) return json({ error: "private mode needs an allowed login" }, 403);
-    const persona = await opts.persona({ barsafe, capabilities: tools.capabilities(), codebook: r.codebook() });
+    const persona = await personaFor(barsafe, "voice");
     // Returned raw: the redactor would mask the token.
     return json(await opts.voice.mint({ persona, tools: tools.decls }));
   }
 
-  async function tool(req: Request, exec?: { waitUntil(p: Promise<unknown>): void }) {
+  async function tool(req: Request, exec?: Exec) {
     const a = (await req.json().catch(() => ({}))) as {
       name?: string;
       args?: Record<string, unknown>;
       safe?: boolean;
       session?: string;
     };
-    const name = String(a.name ?? "");
-    const args = a.args ?? {};
     const ctx: Ctx = { session: String(a.session ?? ""), who: await who(req), barsafe: a.safe !== false };
+    const { status, body } = await invoke(String(a.name ?? ""), a.args ?? {}, ctx, exec);
+    return json(body, status);
+  }
+
+  async function invoke(name: string, args: Record<string, unknown>, ctx: Ctx, exec?: Exec) {
+    const json = (body: unknown, status = 200) => ({ status, body });
     const kind = tools.kind(name);
     const t0 = Date.now();
 
@@ -114,13 +130,20 @@ export async function defineDot(opts: DotOptions): Promise<Dot> {
     const a = (await req.json().catch(() => ({}))) as { session?: string; events?: ClientEvent[] };
     const session = String(a.session ?? "");
     if (!SESSION.test(session)) return json({ error: "bad session" }, 400);
-    // Secrets and emails are stripped; amounts are kept, as in hev dot.
-    await opts.traces(session, r.safe(toLines(session, a.events ?? [])));
+    await writeTrace(session, a.events ?? []);
     return json({ ok: true });
+  }
+
+  async function writeTrace(session: string, events: ClientEvent[]) {
+    // Secrets and emails are stripped; amounts are kept, as in hev dot.
+    if (opts.traces) await opts.traces(session, r.safe(toLines(session, events)));
   }
 
   return {
     registry: tools,
+    invoke,
+    persona: personaFor,
+    trace: writeTrace,
     async fetch(req, _env, exec) {
       const p = new URL(req.url).pathname;
       if (!p.startsWith(base + "/")) return json({ error: "no" }, 404);
