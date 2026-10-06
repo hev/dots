@@ -76,9 +76,30 @@ made, so the key stays on the server.
 and the log empty, the Live session and its resumption handle go, and the next
 turn gets a new session id. The old session's trace ends with a `cleared` event.
 
+## Text, sub-agents and info
+
+Give `defineDot` a `chat` model and typed questions on the screen are answered in
+text (`POST /api/chat`, streamed), so typing never wakes the voice. A `subagent`
+adds a slow `deep_think` tool: a stronger model works the question through the
+dot's read tools (never acts, displays or itself) and the voice relays its
+answer. `inbox` names the address the dot reads mail from.
+
+```ts
+const dot = await defineDot({
+  /* ... */
+  chat: geminiChat({ apiKey }),
+  subagent: { model: geminiChat({ apiKey, model: "gemini-3.1-pro-preview" }), when: "budgets, trends" },
+  inbox: "me@example.com",
+});
+const page = screenRoutes({ name: "me", orb: "/icon-512.png" });
+```
+
+The screen's **info** pane lists the tools (from `GET /api/info`) and the inbox.
+`orb` puts the dot's own art in the middle of the screen.
+
 ## Routes
 
-`GET /api/token`, `POST /api/tool`, `POST /api/trace`, `GET /api/job/<id>`.
+`GET /api/token`, `POST /api/tool`, `POST /api/chat`, `POST /api/trace`, `GET /api/job/<id>`, `GET /api/info`.
 
 ## Slack
 

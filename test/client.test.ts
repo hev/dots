@@ -37,3 +37,8 @@ test("routes serve the page at / and pass everything else on", async () => {
   assert.equal(route(new Request("https://me.example/api/token")), null);
   assert.equal(route(new Request("https://me.example/", { method: "POST" })), null);
 });
+
+test("the orb can be the dot's own art", () => {
+  assert.match(screen({ name: "me", orb: "/icon.png" }), /<img id="core" class="art" src="\/icon.png"/);
+  assert.match(screen({ name: "me" }), /<span id="core">/);
+});

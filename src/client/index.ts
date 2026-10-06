@@ -3,7 +3,9 @@
 // token. Tool calls go to the dot's own /api/tool with the session id, so acts
 // read back and run only on a matching yes; slow tools poll /api/job; display
 // tools ({url, label}) put a link on screen and the model hears only that it's up.
-// "new" (or typing /clear) ends the session: the screen empties, the Live
+// Typed questions are answered in text (POST /chat, when the dot has a text
+// model), so typing never wakes the voice. "info" lists the dot's tools and the
+// inbox it reads. "new" (or typing /clear) ends the session: the screen empties, the Live
 // session and its resumption handle go, and the next turn starts a fresh session id.
 //
 // Extracted from hev dot's web/index.html, minus what's hev mind's own (cues,
@@ -30,6 +32,8 @@ export type ScreenOptions = {
   accent?: string;
   /** Makes the screen installable as an app; pair with installRoutes(). */
   install?: InstallOptions;
+  /** An image for the orb, e.g. the dot's icon; round art fills it. Default a plain dot. */
+  orb?: string;
 };
 
 const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
@@ -57,15 +61,16 @@ ${o.install ? installHead(o.install) : ""}
 <body>
 <div class="app">
   <header><div class="wm">${esc(o.name)}<span class="cur"></span>${o.subtitle ? `<span class="sfx">${esc(o.subtitle)}</span>` : ""}</div>
-    <button id="install" hidden>install</button><button id="new" title="clear the conversation and start fresh">new</button><button id="mode"></button><button id="logBtn">log</button></header>
+    <button id="install" hidden>install</button><button id="new" title="clear the conversation and start fresh">new</button><button id="mode"></button><button id="infoBtn">info</button><button id="logBtn">log</button></header>
   <main>
-    <button id="dot" aria-label="talk"><span id="halo"></span><span id="core"></span></button>
+    <button id="dot" aria-label="talk"><span id="halo"></span>${o.orb ? `<img id="core" class="art" src="${esc(o.orb)}" alt="">` : `<span id="core"></span>`}</button>
     <div id="status">tap to talk</div>
     <div id="you"></div><div id="say"></div>
     <div id="chips"></div><div id="links"></div>
   </main>
   <footer><input id="type" placeholder="or type" autocomplete="off"></footer>
   <section id="log"><div class="bar"><span id="logStats"></span><button id="copyLog">copy</button><button id="logClose">close</button></div><div id="list"></div></section>
+  <section id="info"><div class="bar"><span>${esc(o.name)}</span><button id="infoClose">close</button></div><div id="about"></div></section>
   <div id="toast"></div>
 </div>
 <script>const CFG=${json};
@@ -105,6 +110,8 @@ main{flex:1;display:flex;flex-direction:column;align-items:center;justify-conten
 #core{position:absolute;inset:30px;border-radius:50%;background:var(--ink);transition:transform .08s,background .2s}
 #dot.on #core{background:var(--sig)}
 #dot.connecting #core{animation:pulse 1s ease-in-out infinite}
+#core.art{width:90px;height:90px;object-fit:cover;background:var(--card);box-shadow:0 0 18px 2px color-mix(in srgb,var(--sig) 35%,transparent)}
+#dot.on #core.art{background:var(--card);box-shadow:0 0 30px 8px color-mix(in srgb,var(--sig) 70%,transparent)}
 @keyframes pulse{50%{opacity:.4}}
 #status{font:500 13px var(--mono);color:var(--muted)}
 #you{color:var(--muted);font-size:15px;text-align:center;min-height:1.2em}
@@ -122,9 +129,14 @@ main{flex:1;display:flex;flex-direction:column;align-items:center;justify-conten
 #links .card a.go{display:block;border:0;border-top:1px solid var(--rule);border-radius:0;padding:9px 12px;color:var(--sig);font-weight:600;text-align:center}
 footer{padding:8px 16px max(14px,env(safe-area-inset-bottom))}
 #type{width:100%;font:inherit;font-size:16px;padding:11px 14px;border-radius:99px;border:1px solid var(--rule);background:var(--card);color:var(--ink)}
-#log{position:absolute;inset:0;background:var(--paper);display:none;flex-direction:column}
-#log.on{display:flex}
-#log .bar{display:flex;gap:8px;align-items:center;padding:max(14px,env(safe-area-inset-top)) 16px 8px}
+#log,#info{position:absolute;inset:0;background:var(--paper);display:none;flex-direction:column}
+#log.on,#info.on{display:flex}
+#info .bar span{margin-right:auto;font:700 15px var(--mono)}
+#about{flex:1;overflow:auto;padding:0 16px 16px;font-size:14px}
+#about h3{font:600 12px var(--mono);color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin:16px 0 6px}
+#about .tl{padding:7px 0;border-bottom:1px solid var(--rule)}#about .tl b{font-weight:600}#about .tl i{font:11px var(--mono);color:var(--sig);font-style:normal;margin-left:6px}
+#about .tl div{color:var(--muted);font-size:13px;margin-top:2px}#about a{color:var(--sig)}
+#log .bar,#info .bar{display:flex;gap:8px;align-items:center;padding:max(14px,env(safe-area-inset-top)) 16px 8px}
 #logStats{margin-right:auto;font:500 12px var(--mono);color:var(--muted)}
 #list{flex:1;overflow:auto;padding:0 16px 16px;font-size:14px}
 .m{padding:6px 0;border-bottom:1px solid var(--rule);overflow-wrap:anywhere}
@@ -160,13 +172,22 @@ function ship(beacon){ if(!unsent.length) return; const body=JSON.stringify({ses
   if(beacon&&navigator.sendBeacon) navigator.sendBeacon(API+'/trace',new Blob([body],{type:'application/json'}));
   else fetch(API+'/trace',{method:'POST',headers:{'content-type':'application/json'},body,keepalive:true}).catch(()=>{}); }
 setInterval(()=>ship(false),4000); addEventListener('pagehide',()=>ship(true));
-function log(cls,text,extra){ rec({t:Date.now()-T0,kind:cls,text,...extra}); const d=document.createElement('div'); d.className='m '+cls; d.textContent=text; $('#list').append(d); $('#list').scrollTop=1e9; return d; }
+function show(cls,text){ const d=document.createElement('div'); d.className='m '+cls; d.textContent=text; $('#list').append(d); $('#list').scrollTop=1e9; return d; }
+function log(cls,text,extra){ rec({t:Date.now()-T0,kind:cls,text,...extra}); return show(cls,text); }
 function logTool(fc,result,ms){ const err=!!result?.error, body=JSON.stringify(result,null,1)||'';
   rec({t:Date.now()-T0,kind:'tool',name:fc.name,args:fc.args||{},ms,bytes:body.length,error:result?.error||null,result});
   const d=document.createElement('div'); d.className='m tool'+(err?' err':'');
   d.innerHTML='<span class="ms">'+ms+' ms</span><b>'+(err?'✗':'⚙')+' '+esc(fc.name)+'</b>('+esc(JSON.stringify(fc.args||{}))+')'+(err?'<br>'+esc(result.error):'')+'<pre>'+esc(body.slice(0,20000))+'</pre>';
   d.onclick=()=>d.classList.toggle('open'); $('#list').append(d);
   const ts=trace.filter(x=>x.kind==='tool'); $('#logStats').textContent=ts.length+' tool calls · '+ts.filter(x=>x.error).length+' errors'; }
+/* info: the tools, as the dot sees them, and the inbox it reads */
+const KIND={act:'needs a yes',private:'private mode',display:'shows on screen',slow:'sub-agent'};
+$('#infoBtn').onclick=async()=>{ $('#info').classList.add('on'); const box=$('#about'); box.textContent='…';
+  const i=await fetch(API+'/info').then(r=>r.json()).catch(()=>null); if(!i||i.error){ box.textContent='Couldn’t load the tool list.'; return; }
+  box.innerHTML=(i.inbox?'<h3>Inbox</h3><div class="tl">Forward mail to <a href="mailto:'+esc(i.inbox)+'">'+esc(i.inbox)+'</a> and '+esc(CFG.name)+' can read it.</div>':'')+
+    '<h3>Tools · '+i.tools.length+'</h3>'+i.tools.map(t=>'<div class="tl"><b>'+esc(label(t.name))+'</b>'+(KIND[t.kind]?'<i>'+KIND[t.kind]+'</i>':'')+'<div>'+esc(t.description)+'</div></div>').join('')+
+    '<h3>Modes</h3><div class="tl">Tap the dot to talk; type to get answers in text. '+(demo?'Demo mode hides amounts and contact details.':'Private mode shows real numbers.')+'</div>'; };
+$('#infoClose').onclick=()=>$('#info').classList.remove('on');
 $('#logBtn').onclick=()=>$('#log').classList.add('on'); $('#logClose').onclick=()=>$('#log').classList.remove('on');
 $('#copyLog').onclick=()=>navigator.clipboard?.writeText(JSON.stringify(trace,null,1)).then(()=>toast('Copied as JSON')).catch(()=>toast('Copy blocked'));
 
@@ -272,6 +293,23 @@ function awaitJob(fc,id){ const t0=Date.now(), g=gen; busy++;
 const goFull=()=>{ if(!document.fullscreenElement&&!matchMedia('(display-mode: standalone), (display-mode: fullscreen)').matches) document.documentElement.requestFullscreen?.({navigationUI:'hide'}).catch(()=>{}); };
 $('#dot').onclick=async()=>{ if(ws&&ready&&!micStream){ wantMic=true; await startMic().catch(e=>{ toast('Mic: '+e.message); }); }
   else if(ws){ stop(); status('tap to talk'); } else { goFull(); $('#you').textContent=''; $('#say').textContent=''; start(); } };
+/* text mode: a typed question gets a typed answer, from the server's chat loop.
+   Voice stops, so nothing talks over the page. The server traces these turns itself. */
+let textOk=true;
+async function ask(t){ const g=gen; if(ws){ stop(); }
+  show('u',t); $('#you').textContent='“'+t+'”'; $('#say').textContent='…'; status('thinking…');
+  let res; try{ res=await fetch(API+'/chat',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({text:t,session:SID,safe:demo})}); }
+  catch(e){ $('#say').textContent=''; toast('Couldn’t reach '+CFG.name+': '+e.message); status('tap to talk'); return true; }
+  if(res.status===404){ textOk=false; $('#say').textContent=''; $('#list').lastChild?.remove(); return false; }
+  const rd=res.body.getReader(), dec=new TextDecoder(); let buf='', chips=[];
+  for(;;){ const {value,done}=await rd.read(); if(g!==gen) return true; if(done) break; buf+=dec.decode(value,{stream:true});
+    let i; while((i=buf.indexOf('\n'))>=0){ const line=buf.slice(0,i); buf=buf.slice(i+1); if(!line.trim()) continue; const m=JSON.parse(line);
+      if(m.slow){ status('asking a sub-agent…'); const c=document.createElement('span'); c.className='chip'; c.textContent='⟳ '+label(m.slow); $('#chips').append(c); chips.push(c); }
+      if(m.display){ if(m.display.card) showCard(m.display.card); else if(m.display.url) showLink(m.display.url,m.display.label); }
+      if(m.error){ $('#say').textContent=''; show('t','✗ '+m.error); toast(m.error); }
+      if(m.reply){ $('#say').textContent=m.reply; show('d',m.reply); } } }
+  chips.forEach(c=>c.remove()); status('tap to talk'); return true; }
+
 /* a fresh session: the old one's trace ships and ends; everything on screen and in the Live session goes */
 function fresh(){ log('t','cleared'); ship(false); gen++; busy=0; stop(); handle=null;
   SID=newSid(); T0=Date.now(); trace=[]; seq=0;
@@ -280,6 +318,7 @@ function fresh(){ log('t','cleared'); ship(false); gen++; busy=0; stop(); handle
 $('#new').onclick=fresh;
 $('#type').onkeydown=async e=>{ if(e.key!=='Enter'||!e.target.value.trim()) return; const t=e.target.value.trim(); e.target.value='';
   if(/^\/(clear|new)$/i.test(t)) return fresh();
+  if(textOk&&await ask(t)) return;
   if(!ws){ await start({mic:false}); await new Promise(r=>{ const i=setInterval(()=>{ if(ready||!ws){ clearInterval(i); r(); } },100); }); }
   if(!ws) return; flush(); log('u',t); $('#you').textContent='“'+t+'”'; sayText=''; $('#say').textContent='';
   ws.send(JSON.stringify({clientContent:{turns:[{role:'user',parts:[{text:t}]}],turnComplete:true}})); };

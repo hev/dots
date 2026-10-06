@@ -6,3 +6,4 @@ export { memorySink, memoryStore } from "./stores.ts";
 export { toLines, type ClientEvent } from "./traces.ts";
 export type * from "./types.ts";
 export { chat, type ChatModel, type ChatOptions, type Call, type Msg, type TurnHooks } from "./chat.ts";
+export { think, thinkDecl, type SubagentOptions } from "./think.ts";
