@@ -115,6 +115,10 @@ const page = screenRoutes({ name: "me", cues: true, modes: false });
 // chain cues.routes(req) ahead of dot.fetch
 ```
 
+`design` takes the dot past colors: `head` (e.g. a Google Fonts link), `css`
+(after the screen's own, so it wins) and `decor` (HTML drawn behind the app that
+never takes taps: art, petals, a pattern).
+
 `modes: false` hides the demo/private switch and always runs private, for a dot
 with nothing worth hiding. The server still checks the login.
 

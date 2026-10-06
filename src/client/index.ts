@@ -45,6 +45,15 @@ export type ScreenOptions = {
   modes?: boolean;
   /** Play spoken cues from the dot's `<base>/cue` (see cueRoutes). Default false. */
   cues?: boolean;
+  /** The dot's own look, past colors. Trusted strings from the dot's author, never from a user. */
+  design?: {
+    /** Extra tags for <head>, e.g. a Google Fonts link. */
+    head?: string;
+    /** CSS after the screen's own, so it wins. */
+    css?: string;
+    /** HTML drawn behind everything in the app (art, petals, a pattern); it never takes taps. */
+    decor?: string;
+  };
 };
 
 /** The screen's colors. `accent` is the dot's signal: the cursor, the glow, links. `second` marks the tool chips and private mode. */
@@ -80,10 +89,12 @@ export function screen(o: ScreenOptions): string {
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
 ${o.install ? installHead(o.install) : ""}
 <title>${esc(o.name)}</title>
-<style>${CSS.replace("__ACCENT__", accent)}${theme(o.theme)}</style>
+${o.design?.head ?? ""}
+<style>${CSS.replace("__ACCENT__", accent)}${theme(o.theme)}${o.design?.css ?? ""}</style>
 </head>
 <body>
 <div class="app">
+${o.design?.decor ? `<div id="decor" aria-hidden="true">${o.design.decor}</div>` : ""}
   <header><div class="wm">${esc(o.name)}<span class="cur"></span>${o.subtitle ? `<span class="sfx">${esc(o.subtitle)}</span>` : ""}</div>
     <button id="install" hidden>install</button><button id="new" title="clear the conversation and start fresh">new</button><button id="mode"></button><button id="infoBtn">info</button><button id="logBtn">log</button></header>
   <main>
@@ -176,6 +187,9 @@ footer{padding:8px 16px max(14px,env(safe-area-inset-bottom))}
 .m.tool .ms{float:right;color:var(--muted)}
 #toast{position:absolute;left:16px;right:16px;bottom:90px;padding:10px 14px;border-radius:12px;background:var(--ink);color:var(--paper);font-size:14px;opacity:0;transition:opacity .2s;pointer-events:none}
 #toast.on{opacity:1}
+#decor{position:absolute;inset:0;pointer-events:none;overflow:hidden;z-index:0}
+header,main,footer{position:relative;z-index:1}
+#log,#info,#toast{z-index:2}
 `;
 
 // Plain browser JS. CFG comes from the server. Kept in step with hev dot's

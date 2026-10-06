@@ -28,3 +28,11 @@ test("modes: false hides the demo switch; cues are opt-in", () => {
   assert.match(screen({ name: "x" }), /"modes":true,"cues":false/);
   assert.match(screen({ name: "x", modes: false, cues: true }), /"modes":false,"cues":true/);
 });
+
+test("a dot's design goes in: head tags, CSS after the screen's, decor behind the app", () => {
+  const h = screen({ name: "x", design: { head: '<link rel="preconnect" href="https://fonts.gstatic.com">', css: ".wm{color:red}", decor: "<i class=petal></i>" } });
+  assert.ok(h.indexOf("fonts.gstatic.com") < h.indexOf("</head>"));
+  assert.ok(h.indexOf(".wm{color:red}") > h.indexOf("#toast.on"));
+  assert.match(h, /<div id="decor" aria-hidden="true"><i class=petal><\/i><\/div>/);
+  assert.doesNotMatch(screen({ name: "x" }), /id="decor"/);
+});
