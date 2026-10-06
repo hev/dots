@@ -34,7 +34,20 @@ export type ScreenOptions = {
   install?: InstallOptions;
   /** An image for the orb, e.g. the dot's icon; round art fills it. Default a plain dot. */
   orb?: string;
+  /** Colors, for light and dark. Anything left out keeps hev dot's paper and ink. */
+  theme?: { light?: Palette; dark?: Palette };
 };
+
+/** The screen's colors. `accent` is the dot's signal: the cursor, the glow, links. */
+export type Palette = Partial<Record<"paper" | "ink" | "muted" | "rule" | "card" | "accent", string>>;
+
+const COLOR = /^#[0-9a-f]{3,8}$/i;
+function vars(p: Palette = {}): string {
+  return Object.entries(p)
+    .filter(([, v]) => COLOR.test(v))
+    .map(([k, v]) => `--${k === "accent" ? "sig" : k}:${v}`)
+    .join(";");
+}
 
 const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
@@ -56,7 +69,7 @@ export function screen(o: ScreenOptions): string {
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
 ${o.install ? installHead(o.install) : ""}
 <title>${esc(o.name)}</title>
-<style>${CSS.replace("__ACCENT__", accent)}</style>
+<style>${CSS.replace("__ACCENT__", accent)}${theme(o.theme)}</style>
 </head>
 <body>
 <div class="app">
@@ -77,6 +90,12 @@ ${o.install ? installHead(o.install) : ""}
 ${SCRIPT}</script>
 </body>
 </html>`;
+}
+
+function theme(t: ScreenOptions["theme"]): string {
+  if (!t) return "";
+  const light = vars(t.light), dark = vars(t.dark);
+  return (light ? `:root{${light}}` : "") + (dark ? `@media (prefers-color-scheme:dark){:root{${dark}}}` : "");
 }
 
 /** Serves the screen at "/" (and "/index.html"); null for anything else, so it chains. */

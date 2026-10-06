@@ -42,3 +42,10 @@ test("the orb can be the dot's own art", () => {
   assert.match(screen({ name: "me", orb: "/icon.png" }), /<img id="core" class="art" src="\/icon.png"/);
   assert.match(screen({ name: "me" }), /<span id="core">/);
 });
+
+test("a theme sets the colors, light and dark, and only real colors get in", () => {
+  const html = screen({ name: "me", theme: { light: { paper: "#f4e5c6", accent: "#8b5a2b" }, dark: { ink: "#f2e6cc", card: "red;}</style>" } } });
+  assert.match(html, /:root\{--paper:#f4e5c6;--sig:#8b5a2b\}/);
+  assert.match(html, /@media \(prefers-color-scheme:dark\)\{:root\{--ink:#f2e6cc\}\}/);
+  assert.doesNotMatch(html, /red;\}/);
+});
