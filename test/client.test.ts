@@ -44,8 +44,8 @@ test("the orb can be the dot's own art", () => {
 });
 
 test("a theme sets the colors, light and dark, and only real colors get in", () => {
-  const html = screen({ name: "me", theme: { light: { paper: "#f4e5c6", accent: "#8b5a2b" }, dark: { ink: "#f2e6cc", card: "red;}</style>" } } });
-  assert.match(html, /:root\{--paper:#f4e5c6;--sig:#8b5a2b\}/);
+  const html = screen({ name: "me", theme: { light: { paper: "#f4e5c6", accent: "#8b5a2b", second: "#6b7340" }, dark: { ink: "#f2e6cc", card: "red;}</style>" } } });
+  assert.match(html, /:root\{--paper:#f4e5c6;--sig:#8b5a2b;--second:#6b7340\}/);
   assert.match(html, /@media \(prefers-color-scheme:dark\)\{:root\{--ink:#f2e6cc\}\}/);
   assert.doesNotMatch(html, /red;\}/);
 });

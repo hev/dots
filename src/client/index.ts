@@ -38,8 +38,8 @@ export type ScreenOptions = {
   theme?: { light?: Palette; dark?: Palette };
 };
 
-/** The screen's colors. `accent` is the dot's signal: the cursor, the glow, links. */
-export type Palette = Partial<Record<"paper" | "ink" | "muted" | "rule" | "card" | "accent", string>>;
+/** The screen's colors. `accent` is the dot's signal: the cursor, the glow, links. `second` marks the tool chips and private mode. */
+export type Palette = Partial<Record<"paper" | "ink" | "muted" | "rule" | "card" | "accent" | "second", string>>;
 
 const COLOR = /^#[0-9a-f]{3,8}$/i;
 function vars(p: Palette = {}): string {
@@ -122,7 +122,7 @@ header{display:flex;align-items:center;gap:8px;padding:max(14px,env(safe-area-in
 .wm .cur{display:inline-block;width:.5em;height:1em;background:var(--sig);margin-left:.16em;animation:blink 1.2s steps(2) infinite}
 .wm .sfx{color:var(--muted);font-weight:500;margin-left:.4em}
 @keyframes blink{50%{opacity:0}}
-#mode.priv{border-color:var(--sig);color:var(--sig)}
+#mode.priv{border-color:var(--second,var(--sig));color:var(--second,var(--sig))}
 main{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:0 16px;min-height:0}
 #dot{position:relative;width:150px;height:150px;border:0;padding:0;border-radius:50%;background:none}
 #halo{position:absolute;inset:0;border-radius:50%;background:var(--sig);opacity:.14;transition:transform .08s}
@@ -136,7 +136,7 @@ main{flex:1;display:flex;flex-direction:column;align-items:center;justify-conten
 #you{color:var(--muted);font-size:15px;text-align:center;min-height:1.2em}
 #say{font-size:19px;line-height:1.35;text-align:center;max-height:30dvh;overflow:auto}
 #chips{display:flex;flex-wrap:wrap;gap:6px;justify-content:center}
-.chip{font:500 12px var(--mono);border:1px solid var(--rule);border-radius:99px;padding:3px 9px;color:var(--muted)}
+.chip{font:500 12px var(--mono);border:1px solid var(--second,var(--rule));border-radius:99px;padding:3px 9px;color:var(--second,var(--muted))}
 .chip.err{color:#c0392b}
 #links{display:flex;flex-direction:column;gap:6px;width:100%}
 #links a{display:flex;justify-content:space-between;padding:10px 12px;border:1px solid var(--rule);border-radius:12px;background:var(--card);color:var(--ink);text-decoration:none}
