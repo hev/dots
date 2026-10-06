@@ -45,3 +45,10 @@ test("greeting, sounds and a design script reach the page, and the script still 
   assert.match(js, /dot:card/);
   assert.doesNotThrow(() => new Function(js));
 });
+
+test("the screen can attach photos, and sends them inline to Live and with typed turns", () => {
+  const h = screen({ name: "x" });
+  assert.match(h, /<input id="photo" type="file" accept="image\/\*" multiple hidden>/);
+  assert.match(h, /inlineData:\{mimeType:p.mimeType,data:p.data\}/);
+  assert.match(h, /images:ps.map/);
+});

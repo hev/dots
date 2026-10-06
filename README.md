@@ -128,6 +128,15 @@ line breaks kept) and a `style` class for the dot's CSS.
 `modes: false` hides the demo/private switch and always runs private, for a dot
 with nothing worth hiding. The server still checks the login.
 
+## Photos
+
+The screen's 📷 opens the phone's chooser, camera or photo library. Photos are
+shrunk on the phone (1280px JPEG) and wait as thumbnails. In a voice session
+they go in at once, inline in a turn (a Live `realtimeInput` video frame isn't
+seen by a typed turn); otherwise they go with the next typed question, as
+`images` on `POST /api/chat` (up to four, JPEG, PNG or WebP, under 5 MB each).
+The chat history keeps the photos of the last two messages that had them.
+
 ## Routes
 
 `GET /api/token`, `POST /api/tool`, `POST /api/chat`, `POST /api/trace`, `GET /api/job/<id>`, `GET /api/info`.

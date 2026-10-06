@@ -1,4 +1,4 @@
-import { chat, type ChatModel } from "./chat.ts";
+import { chat, type ChatModel, type Image } from "./chat.ts";
 import { gate } from "./receipts.ts";
 import { redactor, type RedactOptions } from "./redact.ts";
 import { memoryStore } from "./stores.ts";
@@ -139,10 +139,12 @@ export async function defineDot(opts: DotOptions): Promise<Dot> {
   /** A typed turn: the same persona, tools and policy, answered in text. Streams NDJSON: {slow}, {display}, then {reply} or {error}. */
   async function talk(req: Request, exec?: Exec) {
     if (!text) return json({ error: "this dot has no text model" }, 404);
-    const a = (await req.json().catch(() => ({}))) as { text?: string; session?: string; safe?: boolean };
+    const a = (await req.json().catch(() => ({}))) as { text?: string; session?: string; safe?: boolean; images?: unknown };
     const session = String(a.session ?? "");
     if (!SESSION.test(session)) return json({ error: "bad session" }, 400);
-    const said = String(a.text ?? "").trim().slice(0, 4000);
+    const images = photos(a.images);
+    if (typeof images === "string") return json({ error: images }, 400);
+    const said = String(a.text ?? "").trim().slice(0, 4000) || (images.length ? "What do you make of this?" : "");
     if (!said) return json({ error: "say something" }, 400);
     const ctx: Ctx = { session, who: await who(req), demo: a.safe !== false };
     if (!ctx.demo && !allowed(ctx.who)) return json({ error: "private mode needs an allowed login" }, 403);
@@ -150,11 +152,21 @@ export async function defineDot(opts: DotOptions): Promise<Dot> {
     const w = writable.getWriter();
     const send = (o: unknown) => w.write(new TextEncoder().encode(JSON.stringify(o) + "\n"));
     const done = text
-      .turn(ctx, said, { onSlow: (name) => send({ slow: name }), onDisplay: (name, result) => send({ display: result, name }) })
+      .turn(ctx, said, { onSlow: (name) => send({ slow: name }), onDisplay: (name, result) => send({ display: result, name }) }, images)
       .then((reply) => send({ reply }), (e) => send({ error: String(e).slice(0, 300) }))
       .finally(() => w.close());
     exec?.waitUntil(done);
     return new Response(readable, { headers: { "content-type": "application/x-ndjson", "cache-control": "no-cache" } });
+  }
+
+  /** Photos from the screen: up to four, JPEG, PNG or WebP, base64, each under about 5 MB. A string is what's wrong. */
+  function photos(x: unknown): Image[] | string {
+    if (x === undefined || x === null) return [];
+    if (!Array.isArray(x) || x.length > 4) return "up to four photos";
+    for (const i of x as Image[])
+      if (!i || !/^image\/(jpeg|png|webp)$/.test(String(i.mimeType)) || typeof i.data !== "string" || i.data.length > 7_000_000 || !/^[A-Za-z0-9+/=]+$/.test(i.data.slice(0, 200)))
+        return "a photo has to be a JPEG, PNG or WebP under 5 MB";
+    return (x as Image[]).map((i) => ({ mimeType: i.mimeType, data: i.data }));
   }
 
   /** What the screen's info pane shows: the tools, in the persona's own words, and the inbox. */

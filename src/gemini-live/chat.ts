@@ -8,12 +8,13 @@ export type GeminiChatOptions = { apiKey: string; model?: string };
 
 type Part =
   | { text: string }
+  | { inlineData: { mimeType: string; data: string } }
   | { functionCall: { name: string; args: Record<string, unknown> } }
   | { functionResponse: { name: string; response: Record<string, unknown> } };
 
 export function contents(history: Msg[]) {
   return history.map((m) => {
-    if (m.role === "user") return { role: "user", parts: [{ text: m.text }] as Part[] };
+    if (m.role === "user") return { role: "user", parts: [...(m.images ?? []).map((i) => ({ inlineData: i })), { text: m.text }] as Part[] };
     if (m.role === "model") {
       if (Array.isArray(m.raw)) return { role: "model", parts: m.raw as Part[] };
       const parts: Part[] = [];

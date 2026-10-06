@@ -7,10 +7,13 @@ import type { Dot } from "./dot.ts";
 import type { ClientEvent } from "./traces.ts";
 import type { Ctx, Store, ToolDecl } from "./types.ts";
 
+/** A photo attached to a typed turn: base64 data, no data: prefix. */
+export type Image = { mimeType: string; data: string };
+
 export type Call = { id: string; name: string; args: Record<string, unknown> };
 
 export type Msg =
-  | { role: "user"; text: string }
+  | { role: "user"; text: string; images?: Image[] }
   /** `raw` is the provider's own turn, sent back as-is (Gemini 3 needs its thought signatures returned). */
   | { role: "model"; text?: string; calls?: Call[]; raw?: unknown }
   | { role: "tool"; results: { id: string; name: string; result: unknown }[] };
@@ -62,11 +65,11 @@ export function chat(o: ChatOptions) {
 
   return {
     /** One user message in, the dot's reply out. */
-    async turn(ctx: Ctx, text: string, hooks: TurnHooks = {}): Promise<string> {
+    async turn(ctx: Ctx, text: string, hooks: TurnHooks = {}, images: Image[] = []): Promise<string> {
       const key = keyOf(ctx);
       const history = (((await o.store.get(key)) as Msg[] | undefined) ?? []).slice(-keep);
-      const trace: ClientEvent[] = [{ kind: "u", id: `${Date.now()}u`, ts: Date.now(), text }];
-      history.push({ role: "user", text });
+      const trace: ClientEvent[] = [{ kind: "u", id: `${Date.now()}u`, ts: Date.now(), text: images.length ? `[${images.length} photo${images.length > 1 ? "s" : ""}] ${text}` : text }];
+      history.push({ role: "user", text, ...(images.length ? { images } : {}) });
       const system = await o.dot.persona(ctx.demo, o.surface);
 
       let reply = "";
@@ -98,7 +101,10 @@ export function chat(o: ChatOptions) {
       if (!reply) reply = "I went round in circles on that one. Ask me again, more narrowly?";
 
       trace.push({ kind: "d", id: `${Date.now()}d`, ts: Date.now(), text: reply, model: o.model.name });
-      await o.store.put(key, history.slice(-keep), 7 * 24 * 3600);
+      // Photos stay with the last two messages that had them; older ones keep a mark, so the history stays small.
+      let seen = 0;
+      const kept = history.slice(-keep).reverse().map((m) => (m.role === "user" && m.images ? (++seen > 2 ? { role: "user" as const, text: `[a photo she shared earlier] ${m.text}` } : m) : m)).reverse();
+      await o.store.put(key, kept, 7 * 24 * 3600);
       await o.dot.trace(ctx.session, trace);
       return reply;
     },

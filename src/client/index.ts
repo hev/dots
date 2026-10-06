@@ -114,7 +114,7 @@ ${o.design?.decor ? `<div id="decor" aria-hidden="true">${o.design.decor}</div>`
     <div id="you"></div><div id="say"></div>
     <div id="chips"></div><div id="links"></div>
   </main>
-  <footer><input id="type" placeholder="or type" autocomplete="off"></footer>
+  <footer><div id="pending"></div><div class="row"><button id="attach" aria-label="add a photo" title="add a photo">📷</button><input id="photo" type="file" accept="image/*" multiple hidden><input id="type" placeholder="or type" autocomplete="off"></div></footer>
   <section id="log"><div class="bar"><span id="logStats"></span><button id="copyLog">copy</button><button id="logClose">close</button></div><div id="list"></div></section>
   <section id="info"><div class="bar"><span>${esc(o.name)}</span><button id="infoClose">close</button></div><div id="about"></div></section>
   <div id="toast"></div>
@@ -180,6 +180,12 @@ main{flex:1;display:flex;flex-direction:column;align-items:center;justify-conten
 .card dl{display:grid;grid-template-columns:auto 1fr;gap:2px 10px;margin:8px 0 0;font-size:13px}.card dt{color:var(--muted)}.card dd{margin:0}
 #links .card a.go{display:block;border:0;border-top:1px solid var(--rule);border-radius:0;padding:9px 12px;color:var(--sig);font-weight:600;text-align:center}
 footer{padding:8px 16px max(14px,env(safe-area-inset-bottom))}
+footer .row{display:flex;gap:8px;align-items:center}
+#attach{flex:none;width:44px;height:44px;padding:0;font-size:19px;border-radius:50%;background:var(--card)}
+#pending{display:flex;gap:6px;margin-bottom:6px}#pending:empty{display:none}
+#pending span{position:relative}#pending img{width:52px;height:52px;object-fit:cover;border-radius:10px;border:1px solid var(--rule);display:block}
+#pending b{position:absolute;top:-6px;right:-6px;width:20px;height:20px;border-radius:50%;background:var(--ink);color:var(--paper);font:700 12px/20px var(--sans);text-align:center;cursor:pointer}
+.m img{max-width:120px;max-height:120px;border-radius:8px;display:block;margin-top:4px}
 #type{width:100%;font:inherit;font-size:16px;padding:11px 14px;border-radius:99px;border:1px solid var(--rule);background:var(--card);color:var(--ink)}
 #log,#info{position:absolute;inset:0;background:var(--paper);display:none;flex-direction:column}
 #log.on,#info.on{display:flex}
@@ -327,7 +333,8 @@ async function onMsg(m){
     const mic=micStream?true:wantMic?await startMic().catch(e=>{ toast('Mic: '+e.message); return false; }):false;
     if(mic&&!quietStart){ await wakingCue; await playCue('ready'); }  // only then open the mic, so it doesn't hear itself
     micOpen=true; if(!mic&&wantMic) status('typing only'); emit('ready');
-    if(CFG.greeting&&greeted!==SID&&!quietStart){ greeted=SID; emit('greet'); note(CFG.greeting); }
+    if(pending.length) photosToLive('');
+    else if(CFG.greeting&&greeted!==SID&&!quietStart){ greeted=SID; emit('greet'); note(CFG.greeting); }
     return; }
   if(m.sessionResumptionUpdate?.newHandle) handle=m.sessionResumptionUpdate.newHandle;
   if(m.goAway){ log('t','reconnecting'); playCue('reconnect'); const w=ws; ws=null; w?.close(1000); return start({mic:wantMic,quiet:true}); }
@@ -385,10 +392,11 @@ $('#dot').onclick=async()=>{ if(ws&&ready&&!micStream){ wantMic=true; await star
    Voice stops, so nothing talks over the page. The server traces these turns itself. */
 let textOk=true;
 async function ask(t){ const g=gen; if(ws){ stop(); }
-  show('u',t); $('#you').textContent='“'+t+'”'; $('#say').textContent='…'; status('thinking…');
-  let res; try{ res=await fetch(API+'/chat',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({text:t,session:SID,safe:demo})}); }
+  const ps=pending; pending=[]; drawPending();
+  if(ps.length) logPhotos(ps,t); else show('u',t); $('#you').textContent='“'+t+'”'; $('#say').textContent='…'; status('thinking…');
+  let res; try{ res=await fetch(API+'/chat',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({text:t,session:SID,safe:demo,...(ps.length?{images:ps.map(p=>({mimeType:p.mimeType,data:p.data}))}:{})})}); }
   catch(e){ $('#say').textContent=''; toast('Couldn’t reach '+CFG.name+': '+e.message); status('tap to talk'); return true; }
-  if(res.status===404){ textOk=false; $('#say').textContent=''; $('#list').lastChild?.remove(); return false; }
+  if(res.status===404){ pending=ps.concat(pending); drawPending(); textOk=false; $('#say').textContent=''; $('#list').lastChild?.remove(); return false; }
   const rd=res.body.getReader(), dec=new TextDecoder(); let buf='', chips=[];
   for(;;){ const {value,done}=await rd.read(); if(g!==gen) return true; if(done) break; buf+=dec.decode(value,{stream:true});
     let i; while((i=buf.indexOf('\n'))>=0){ const line=buf.slice(0,i); buf=buf.slice(i+1); if(!line.trim()) continue; const m=JSON.parse(line);
@@ -398,17 +406,37 @@ async function ask(t){ const g=gen; if(ws){ stop(); }
       if(m.reply){ $('#say').textContent=m.reply; show('d',m.reply); } } }
   chips.forEach(c=>c.remove()); status('tap to talk'); return true; }
 
+/* photos: from the camera roll or the camera, shrunk on the phone, then sent to the voice session or with the next typed turn */
+let pending=[];
+async function shrink(file){ const img=await new Promise((ok,no)=>{ const i=new Image(); i.onload=()=>ok(i); i.onerror=()=>no(new Error('can’t read that photo')); i.src=URL.createObjectURL(file); });
+  const k=Math.min(1,1280/Math.max(img.naturalWidth,img.naturalHeight)), c=document.createElement('canvas'); c.width=Math.round(img.naturalWidth*k); c.height=Math.round(img.naturalHeight*k);
+  c.getContext('2d').drawImage(img,0,0,c.width,c.height); URL.revokeObjectURL(img.src); const url=c.toDataURL('image/jpeg',.85);
+  return {mimeType:'image/jpeg',data:url.split(',')[1],url}; }
+function drawPending(){ const box=$('#pending'); box.textContent='';
+  pending.forEach((p,i)=>{ const s=document.createElement('span'); s.innerHTML='<img alt="photo to send"><b aria-label="remove">×</b>'; s.querySelector('img').src=p.url;
+    s.querySelector('b').onclick=()=>{ pending.splice(i,1); drawPending(); }; box.append(s); }); }
+function logPhotos(ps,text){ const d=log('u',(text?text+' ':'')+'['+ps.length+' photo'+(ps.length>1?'s':'')+']'); ps.forEach(p=>{ const im=document.createElement('img'); im.src=p.url; d.append(im); }); }
+/* to the Live session: the photos inline in one turn with what to do with them
+   (a realtimeInput video frame isn't seen by a typed turn; checked against Gemini Live) */
+function photosToLive(text){ const ps=pending; pending=[]; drawPending(); if(!ps.length) return;
+  logPhotos(ps,text); emit('photo',{count:ps.length});
+  ws.send(JSON.stringify({clientContent:{turns:[{role:'user',parts:[...ps.map(p=>({inlineData:{mimeType:p.mimeType,data:p.data}})),{text:text||'[note from the app, not from '+CFG.user+'] '+CFG.user+' just shared '+(ps.length>1?ps.length+' photos':'a photo')+'. Say in a sentence what you see, then ask what she’d like to do with it.'}]}],turnComplete:true}})); }
+$('#attach').onclick=()=>$('#photo').click();
+$('#photo').onchange=async e=>{ const files=[...e.target.files].slice(0,4-pending.length); e.target.value='';
+  for(const f of files){ try{ pending.push(await shrink(f)); }catch(err){ toast(err.message); } }
+  drawPending(); if(ws&&ready&&pending.length) photosToLive($('#type').value.trim()||''); };
+
 /* a fresh session: the old one's trace ships and ends; everything on screen and in the Live session goes */
 function fresh(){ log('t','cleared'); ship(false); gen++; busy=0; stop(); handle=null;
   SID=newSid(); T0=Date.now(); trace=[]; seq=0;
   for(const s of ['#list','#links','#chips','#you','#say','#logStats']) $(s).textContent='';
   $('#log').classList.remove('on'); status('tap to talk'); toast('Fresh start.'); }
 $('#new').onclick=fresh;
-$('#type').onkeydown=async e=>{ if(e.key!=='Enter'||!e.target.value.trim()) return; const t=e.target.value.trim(); e.target.value='';
+$('#type').onkeydown=async e=>{ if(e.key!=='Enter'||(!e.target.value.trim()&&!pending.length)) return; const t=e.target.value.trim(); e.target.value='';
   if(/^\/(clear|new)$/i.test(t)) return fresh();
   if(textOk&&await ask(t)) return;
   if(!ws){ await start({mic:false}); await new Promise(r=>{ const i=setInterval(()=>{ if(ready||!ws){ clearInterval(i); r(); } },100); }); }
-  if(!ws) return; flush(); log('u',t); $('#you').textContent='“'+t+'”'; sayText=''; $('#say').textContent='';
+  if(!ws) return; flush(); if(pending.length) return photosToLive(t); log('u',t); $('#you').textContent='“'+t+'”'; sayText=''; $('#say').textContent='';
   ws.send(JSON.stringify({clientContent:{turns:[{role:'user',parts:[{text:t}]}],turnComplete:true}})); };
 
 /* installable: the worker comes from installRoutes() */
