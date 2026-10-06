@@ -8,8 +8,13 @@
 // inbox it reads. "new" (or typing /clear) ends the session: the screen empties, the Live
 // session and its resumption handle go, and the next turn starts a fresh session id.
 //
-// Extracted from hev dot's web/index.html, minus what's hev mind's own (cues,
-// sub-agents, images, dead-air nuggets). A dot serves it with
+// Earcons mark tool calls (a tick to start, a soft pulse while checking, a
+// chord for a card or link, a low pair for an error). With `cues`, short spoken
+// lines in the dot's own voice (from cueRoutes) mark waking, ready, bye and a
+// lost line, so it can be followed in headphones.
+//
+// Extracted from hev dot's web/index.html, minus what's hev mind's own
+// (sub-agents, images, dead-air nuggets). A dot serves it with
 // `screenRoutes(opts)`, chained ahead of `dot.fetch`.
 
 import { installHead, type InstallOptions } from "../install/index.ts";
@@ -36,6 +41,10 @@ export type ScreenOptions = {
   orb?: string;
   /** Colors, for light and dark. Anything left out keeps hev dot's paper and ink. */
   theme?: { light?: Palette; dark?: Palette };
+  /** false hides the demo/private switch and always runs private, for a dot with nothing to hide. Default true. */
+  modes?: boolean;
+  /** Play spoken cues from the dot's `<base>/cue` (see cueRoutes). Default false. */
+  cues?: boolean;
 };
 
 /** The screen's colors. `accent` is the dot's signal: the cursor, the glow, links. `second` marks the tool chips and private mode. */
@@ -58,6 +67,8 @@ export function screen(o: ScreenOptions): string {
     user: o.user ?? "the user",
     labels: Object.assign({}, ...(o.packs ?? []).map((p) => p.labels ?? {}), o.labels),
     base: o.base ?? "/api",
+    modes: o.modes !== false,
+    cues: !!o.cues,
   };
   // JSON inside <script> must not close the tag.
   const json = JSON.stringify(cfg).replace(/</g, "\\u003c");
@@ -178,7 +189,8 @@ function toast(m){ const t=$('#toast'); t.textContent=m; t.classList.add('on'); 
 let ws=null, ready=false, handle=null, wantMic=true, micOpen=false, sayText='', youText='', wake=null, busy=0, gen=0;
 
 /* demo vs private: the server refuses private mode to anyone not allowed */
-let demo=keep('demo')!=='0';
+let demo=CFG.modes&&keep('demo')!=='0';
+if(!CFG.modes) $('#mode').hidden=true;
 function drawMode(){ $('#mode').textContent=demo?'demo':'private'; $('#mode').classList.toggle('priv',!demo); }
 $('#mode').onclick=()=>{ demo=!demo; keep('demo',demo?'1':'0'); drawMode(); if(ws){ stop(); toast(demo?'Demo mode: no amounts or contact details.':'Private mode: full numbers. Tap to start again.'); } };
 drawMode();
@@ -205,7 +217,7 @@ $('#infoBtn').onclick=async()=>{ $('#info').classList.add('on'); const box=$('#a
   const i=await fetch(API+'/info').then(r=>r.json()).catch(()=>null); if(!i||i.error){ box.textContent='Couldn’t load the tool list.'; return; }
   box.innerHTML=(i.inbox?'<h3>Inbox</h3><div class="tl">Forward mail to <a href="mailto:'+esc(i.inbox)+'">'+esc(i.inbox)+'</a> and '+esc(CFG.name)+' can read it.</div>':'')+
     '<h3>Tools · '+i.tools.length+'</h3>'+i.tools.map(t=>'<div class="tl"><b>'+esc(label(t.name))+'</b>'+(KIND[t.kind]?'<i>'+KIND[t.kind]+'</i>':'')+'<div>'+esc(t.description)+'</div></div>').join('')+
-    '<h3>Modes</h3><div class="tl">Tap the dot to talk; type to get answers in text. '+(demo?'Demo mode hides amounts and contact details.':'Private mode shows real numbers.')+'</div>'; };
+    '<h3>Modes</h3><div class="tl">Tap the dot to talk; type to get answers in text.'+(CFG.modes?' '+(demo?'Demo mode hides amounts and contact details.':'Private mode shows real numbers.'):'')+'</div>'; };
 $('#infoClose').onclick=()=>$('#info').classList.remove('on');
 $('#logBtn').onclick=()=>$('#log').classList.add('on'); $('#logClose').onclick=()=>$('#log').classList.remove('on');
 $('#copyLog').onclick=()=>navigator.clipboard?.writeText(JSON.stringify(trace,null,1)).then(()=>toast('Copied as JSON')).catch(()=>toast('Copy blocked'));
@@ -218,6 +230,31 @@ function play(b64){ ensureOut(); const bin=atob(b64), n=bin.length/2, buf=outCtx
   const src=outCtx.createBufferSource(); src.buffer=buf; src.connect(outLevel); const t=Math.max(outCtx.currentTime+.03,outAt); src.start(t); outAt=t+buf.duration;
   playing.push(src); src.onended=()=>{ playing=playing.filter(s=>s!==src); }; }
 function flush(){ playing.forEach(s=>{ try{s.stop();}catch{} }); playing=[]; outAt=0; }
+
+/* sound: earcons for tool calls, and spoken cues in the dot's voice when the dot serves them */
+let sfx; const sfxCtx=()=>sfx||(sfx=new AudioContext());
+function tone(notes,{type='sine',gain=.05,gap=0}={}){ const c=sfxCtx(); c.resume(); let t=c.currentTime+.01;
+  for(const [f,d] of notes){ const o=c.createOscillator(), g=c.createGain(); o.type=type; o.frequency.value=f;
+    g.gain.setValueAtTime(0,t); g.gain.linearRampToValueAtTime(gain,t+.01); g.gain.exponentialRampToValueAtTime(.0001,t+d);
+    o.connect(g); g.connect(c.destination); o.start(t); o.stop(t+d+.02); t+=d+gap; } }
+const ear={
+  tick:()=>tone([[1320,.05]],{gain:.035}),                                // started looking something up
+  working:()=>tone([[440,.09]],{type:'triangle',gain:.025}),              // still checking (every 1.6s)
+  card:()=>tone([[660,.06],[990,.08]],{gain:.04,gap:.02}),                // something went up on screen
+  link:()=>tone([[880,.06],[1320,.08]],{gain:.04,gap:.02}),
+  error:()=>tone([[247,.16],[185,.26]],{type:'triangle',gain:.06,gap:.03}),
+};
+const speakingNow=()=>lvl(outLevel)>.02;
+setInterval(()=>{ if(ws&&busy>0&&!speakingNow()) ear.working(); },1600);
+const cueBuf={}, lastTake={};
+async function loadCue(kind){ if(!CFG.cues) return; try{ const n=Math.floor(Math.random()*6), r=await fetch(API+'/cue?kind='+kind+'&n='+(n===lastTake[kind]?n+1:n)); if(!r.ok) return;
+  lastTake[kind]=n; cueBuf[kind]=await sfxCtx().decodeAudioData(await r.arrayBuffer()); }catch{} }
+['waking','ready','bye','lost','reconnect','unreachable'].forEach(loadCue);
+/* resolves when the cue has finished, so the mic can wait for it and not hear the dot */
+function playCue(kind){ const b=cueBuf[kind]; loadCue(kind); if(!b) return Promise.resolve();
+  const c=sfxCtx(); c.resume(); const s=c.createBufferSource(); s.buffer=b; s.connect(c.destination); s.start();
+  return new Promise(r=>{ s.onended=r; setTimeout(r,(b.duration+.5)*1000); }); }
+let wakingCue=Promise.resolve(), quietStart=false;
 
 /* audio in: mic to 16 kHz PCM16, 40 ms chunks */
 let inCtx, micStream, inLevel;
@@ -244,25 +281,27 @@ const status=t=>$('#status').textContent=t;
 function note(text){ ws?.send(JSON.stringify({clientContent:{turns:[{role:'user',parts:[{text:'[note from the app, not from '+CFG.user+'] '+text}]}],turnComplete:true}})); }
 
 /* the Live session: the token carries the persona and tools, locked server-side */
-async function start({mic=true}={}){ wantMic=mic; micOpen=false;
+async function start({mic=true,quiet=false}={}){ wantMic=mic; micOpen=false;
   const dot=$('#dot'); dot.classList.add('connecting'); status('waking…'); ensureOut(); outCtx.resume();
+  quietStart=quiet; wakingCue=quiet||!mic?Promise.resolve():playCue('waking');
   try{
     const tk=await (await fetch(API+'/token?safe='+(demo?1:0))).json(); if(tk.error) throw new Error(tk.error);
     ws=new WebSocket('wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContentConstrained?access_token='+encodeURIComponent(tk.token));
     ws.onopen=()=>ws.send(JSON.stringify({setup:{model:tk.model,...(handle?{sessionResumption:{handle}}:{})}}));
     ws.onmessage=async ev=>onMsg(JSON.parse(typeof ev.data==='string'?ev.data:await ev.data.text()));
     ws.onclose=e=>{ const was=!!ws; ws=null; ready=false; dot.classList.remove('on','connecting'); stopMic(); wake?.release?.(); wake=null; micOpen=false;
-      status(e.code===1000?'tap to talk':'disconnected · tap to reconnect'); if(e.code!==1000&&was) log('t','session closed '+e.code+(e.reason?' · '+e.reason:'')); };
-  }catch(e){ dot.classList.remove('connecting'); status('tap to talk'); toast('Couldn’t wake '+CFG.name+': '+e.message); ws=null; }
+      status(e.code===1000?'tap to talk':'disconnected · tap to reconnect'); if(e.code!==1000&&was){ log('t','session closed '+e.code+(e.reason?' · '+e.reason:'')); ear.error(); playCue('lost'); } };
+  }catch(e){ dot.classList.remove('connecting'); status('tap to talk'); toast('Couldn’t wake '+CFG.name+': '+e.message); ws=null; ear.error(); wakingCue.then(()=>playCue('unreachable')); }
 }
-function stop(){ if(ws){ const w=ws; ws=null; w.close(1000); } micOpen=false; flush(); }
+function stop({bye=false}={}){ if(ws){ const w=ws; ws=null; w.close(1000); if(bye) playCue('bye'); } micOpen=false; flush(); }
 async function onMsg(m){
   if(m.setupComplete){ ready=true; $('#dot').classList.remove('connecting'); $('#dot').classList.add('on');
     wake=await navigator.wakeLock?.request('screen').catch(()=>null);
     const mic=micStream?true:wantMic?await startMic().catch(e=>{ toast('Mic: '+e.message); return false; }):false;
+    if(mic&&!quietStart){ await wakingCue; await playCue('ready'); }  // only then open the mic, so it doesn't hear itself
     micOpen=true; if(!mic&&wantMic) status('typing only'); return; }
   if(m.sessionResumptionUpdate?.newHandle) handle=m.sessionResumptionUpdate.newHandle;
-  if(m.goAway){ log('t','reconnecting'); const w=ws; ws=null; w?.close(1000); return start({mic:wantMic}); }
+  if(m.goAway){ log('t','reconnecting'); playCue('reconnect'); const w=ws; ws=null; w?.close(1000); return start({mic:wantMic,quiet:true}); }
   if(m.toolCall) return tools(m.toolCall.functionCalls||[]);
   const sc=m.serverContent; if(!sc) return;
   if(sc.interrupted){ flush(); finishSay(); }
@@ -276,7 +315,7 @@ function finishSay(){ if(youText){ log('u',youText.trim()); youText=''; } if(say
 /* display results: a tappable link; the model only hears that it's up */
 function showLink(url,text){ let host; try{ host=new URL(url).hostname; }catch{ return; }
   const a=document.createElement('a'); a.href=url; a.target='_blank'; a.rel='noopener'; a.innerHTML='<span>'+esc(text||host)+'</span><i>'+esc(host)+' ↗</i>';
-  const box=$('#links'); box.prepend(a); while(box.children.length>3) box.lastChild.remove(); log('t','🔗 '+(text||url),{url}); }
+  const box=$('#links'); box.prepend(a); while(box.children.length>3) box.lastChild.remove(); log('t','🔗 '+(text||url),{url}); ear.link(); }
 
 /* display cards: the screen draws it; a tap on the link hands the https URL to the phone, which opens the app */
 function showCard(c){ const el=document.createElement('div'); el.className='card';
@@ -284,18 +323,19 @@ function showCard(c){ const el=document.createElement('div'); el.className='card
     '<div class="ct"><b>'+esc(c.title)+'</b>'+(c.subtitle?'<div class="sub">'+esc(c.subtitle)+'</div>':'')+
     (c.lines?.length?'<dl>'+c.lines.map(l=>'<dt>'+esc(l.k)+'</dt><dd>'+esc(l.v)+'</dd>').join('')+'</dl>':'')+'</div>'+
     (c.link&&/^https:/.test(c.link.url)?'<a class="go" href="'+esc(c.link.url)+'" target="_blank" rel="noopener">'+esc(c.link.label)+' ↗</a>':'');
-  const box=$('#links'); box.prepend(el); while(box.children.length>3) box.lastChild.remove(); log('t','🗂 '+c.title,{card:c}); }
+  const box=$('#links'); box.prepend(el); while(box.children.length>3) box.lastChild.remove(); log('t','🗂 '+c.title,{card:c}); ear.card(); }
 
 async function call(fc){ const r=await fetch(API+'/tool',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({name:fc.name,args:fc.args||{},safe:demo,session:SID})}); return r.json(); }
 async function tools(calls){ const g=gen;
   const responses=await Promise.all(calls.map(async fc=>{
     const chip=document.createElement('span'); chip.className='chip'; chip.textContent='⟳ '+label(fc.name); $('#chips').append(chip);
-    busy++; const t0=performance.now(); let result;
+    busy++; ear.tick(); const t0=performance.now(); let result;
     try{ result=await call(fc); }catch(e){ result={error:String(e)}; }
     if(g!==gen) return null; busy--; logTool(fc,result,Math.round(performance.now()-t0));
     if(result?.job){ awaitJob(fc,result.job); result={working:true,note:'This takes a while. The answer will come back by itself; say so and carry on.'}; }
     else if(result?.card&&!result.error){ showCard(result.card); result={shown:true,...(result.card.note?{note:result.card.note}:{})}; }
     else if(result?.url&&result.label&&!result.error){ showLink(result.url,result.label); result={shown:true}; }
+    if(result?.error) ear.error();
     chip.className='chip'+(result?.error?' err':''); chip.textContent=(result?.error?'✗ ':'✓ ')+label(fc.name); setTimeout(()=>chip.remove(),6000);
     return {id:fc.id,name:fc.name,response:{result}}; }));
   if(g===gen) ws?.send(JSON.stringify({toolResponse:{functionResponses:responses}})); }
@@ -311,7 +351,7 @@ function awaitJob(fc,id){ const t0=Date.now(), g=gen; busy++;
 
 const goFull=()=>{ if(!document.fullscreenElement&&!matchMedia('(display-mode: standalone), (display-mode: fullscreen)').matches) document.documentElement.requestFullscreen?.({navigationUI:'hide'}).catch(()=>{}); };
 $('#dot').onclick=async()=>{ if(ws&&ready&&!micStream){ wantMic=true; await startMic().catch(e=>{ toast('Mic: '+e.message); }); }
-  else if(ws){ stop(); status('tap to talk'); } else { goFull(); $('#you').textContent=''; $('#say').textContent=''; start(); } };
+  else if(ws){ stop({bye:true}); status('tap to talk'); } else { goFull(); $('#you').textContent=''; $('#say').textContent=''; start(); } };
 /* text mode: a typed question gets a typed answer, from the server's chat loop.
    Voice stops, so nothing talks over the page. The server traces these turns itself. */
 let textOk=true;

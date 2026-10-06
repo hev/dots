@@ -73,3 +73,4 @@ export function geminiLive(o: GeminiLiveOptions): VoiceProvider {
   };
 }
 export { geminiChat, type GeminiChatOptions } from "./chat.ts";
+export { geminiSpeak, wav, type GeminiSpeakOptions } from "./speak.ts";

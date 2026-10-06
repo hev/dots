@@ -97,6 +97,27 @@ const page = screenRoutes({ name: "me", orb: "/icon-512.png" });
 The screen's **info** pane lists the tools (from `GET /api/info`) and the inbox.
 `orb` puts the dot's own art in the middle of the screen.
 
+## Sound and modes
+
+The screen plays earcons on its own: a tick when a tool starts, a soft pulse
+every 1.6s while one is running, a chord when a card or link goes up, and a low
+pair on an error. `cues: true` adds short spoken lines in the dot's own voice for
+waking, ready, bye, a lost line, reconnecting and unreachable; the mic opens only
+after "ready" finishes, so the dot doesn't hear itself. The dot serves them:
+
+```ts
+import { cueRoutes } from "@hevmind/dots/cues";
+import { geminiSpeak } from "@hevmind/dots/gemini-live";
+
+const cues = cueRoutes({ speak: geminiSpeak({ apiKey, voice: "Sulafat", style: "[warm, relaxed] " }), key: "Sulafat" });
+cues.warm();                                    // speak every take once, ahead of the first tap
+const page = screenRoutes({ name: "me", cues: true, modes: false });
+// chain cues.routes(req) ahead of dot.fetch
+```
+
+`modes: false` hides the demo/private switch and always runs private, for a dot
+with nothing worth hiding. The server still checks the login.
+
 ## Routes
 
 `GET /api/token`, `POST /api/tool`, `POST /api/chat`, `POST /api/trace`, `GET /api/job/<id>`, `GET /api/info`.
