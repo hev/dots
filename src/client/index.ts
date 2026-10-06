@@ -246,7 +246,7 @@ function logTool(fc,result,ms){ const err=!!result?.error, body=JSON.stringify(r
 const KIND={act:'needs a yes',private:'private mode',display:'shows on screen',slow:'sub-agent'};
 $('#infoBtn').onclick=async()=>{ $('#info').classList.add('on'); const box=$('#about'); box.textContent='…';
   const i=await fetch(API+'/info').then(r=>r.json()).catch(()=>null); if(!i||i.error){ box.textContent='Couldn’t load the tool list.'; return; }
-  box.innerHTML=(i.inbox?'<h3>Inbox</h3><div class="tl">Forward mail to <a href="mailto:'+esc(i.inbox)+'">'+esc(i.inbox)+'</a> and '+esc(CFG.name)+' can read it.</div>':'')+
+  box.innerHTML=(i.inbox?'<h3>Inbox</h3><div class="tl">Forward mail to <a href="mailto:'+esc(i.inbox)+'">'+esc(i.inbox)+'</a> and your dot can read it.</div>':'')+
     '<h3>Tools · '+i.tools.length+'</h3>'+i.tools.map(t=>'<div class="tl"><b>'+esc(label(t.name))+'</b>'+(KIND[t.kind]?'<i>'+KIND[t.kind]+'</i>':'')+'<div>'+esc(t.description)+'</div></div>').join('')+
     '<h3>Modes</h3><div class="tl">Tap the dot to talk; type to get answers in text.'+(CFG.modes?' '+(demo?'Demo mode hides amounts and contact details.':'Private mode shows real numbers.'):'')+'</div>'; };
 $('#infoClose').onclick=()=>$('#info').classList.remove('on');
