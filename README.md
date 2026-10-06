@@ -119,6 +119,12 @@ const page = screenRoutes({ name: "me", cues: true, modes: false });
 (after the screen's own, so it wins) and `decor` (HTML drawn behind the app that
 never takes taps: art, petals, a pattern).
 
+`greeting` is a note the model gets when a fresh session is ready ("Open with a
+haiku"). `sounds` swaps the earcons' notes. `design.script` is the dot's own JS;
+the screen fires `dot:ready`, `dot:greet`, `dot:tool`, `dot:done`, `dot:card`,
+`dot:error` and `dot:bye` on `window` for it. A card can carry a `body` (a poem,
+line breaks kept) and a `style` class for the dot's CSS.
+
 `modes: false` hides the demo/private switch and always runs private, for a dot
 with nothing worth hiding. The server still checks the login.
 

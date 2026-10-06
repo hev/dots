@@ -39,6 +39,10 @@ export type Card = {
   /** Served by the dot or a public URL; never one carrying a key. */
   image?: { src: string; alt: string };
   link?: { url: string; label: string };
+  /** Free text under the title, line breaks kept: a poem, a note. */
+  body?: string;
+  /** A class name for the dot's own CSS, e.g. "haiku". */
+  style?: string;
   /** For the model only: what to say about the card now that it's up. */
   note?: string;
 };

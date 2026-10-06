@@ -36,3 +36,12 @@ test("a dot's design goes in: head tags, CSS after the screen's, decor behind th
   assert.match(h, /<div id="decor" aria-hidden="true"><i class=petal><\/i><\/div>/);
   assert.doesNotMatch(screen({ name: "x" }), /id="decor"/);
 });
+
+test("greeting, sounds and a design script reach the page, and the script still parses", () => {
+  const h = screen({ name: "x", greeting: "Open with a haiku.", sounds: { tick: { notes: [[988, 0.08]], type: "triangle" } }, design: { script: "addEventListener('dot:card',()=>{});" } });
+  assert.match(h, /"greeting":"Open with a haiku."/);
+  assert.match(h, /"sounds":\{"tick":\{"notes":\[\[988,0.08\]\],"type":"triangle"\}\}/);
+  const js = h.split("<script>")[1]!.split("</script>")[0]!;
+  assert.match(js, /dot:card/);
+  assert.doesNotThrow(() => new Function(js));
+});

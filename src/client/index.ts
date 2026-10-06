@@ -53,8 +53,17 @@ export type ScreenOptions = {
     css?: string;
     /** HTML drawn behind everything in the app (art, petals, a pattern); it never takes taps. */
     decor?: string;
+    /** Trusted JS run after the screen's own. It can listen for the screen's events on window:
+     *  dot:ready, dot:greet, dot:tool {name}, dot:done {name, error}, dot:card {card}, dot:error, dot:bye. */
+    script?: string;
   };
+  /** Sent to the model, as a note from the app, when a fresh session is ready (not on a reconnect), e.g. "Open with a haiku". */
+  greeting?: string;
+  /** The dot's own earcons: notes as [hz, seconds], with an oscillator type, gain and gap. */
+  sounds?: Partial<Record<"tick" | "working" | "card" | "link" | "error", Sound>>;
 };
+
+export type Sound = { notes: [number, number][]; type?: "sine" | "triangle" | "square" | "sawtooth"; gain?: number; gap?: number };
 
 /** The screen's colors. `accent` is the dot's signal: the cursor, the glow, links. `second` marks the tool chips and private mode. */
 export type Palette = Partial<Record<"paper" | "ink" | "muted" | "rule" | "card" | "accent" | "second", string>>;
@@ -78,6 +87,8 @@ export function screen(o: ScreenOptions): string {
     base: o.base ?? "/api",
     modes: o.modes !== false,
     cues: !!o.cues,
+    greeting: o.greeting ?? null,
+    sounds: o.sounds ?? {},
   };
   // JSON inside <script> must not close the tag.
   const json = JSON.stringify(cfg).replace(/</g, "\\u003c");
@@ -109,7 +120,7 @@ ${o.design?.decor ? `<div id="decor" aria-hidden="true">${o.design.decor}</div>`
   <div id="toast"></div>
 </div>
 <script>const CFG=${json};
-${SCRIPT}</script>
+${SCRIPT}${o.design?.script ? `\n;(()=>{${o.design.script}\n})();` : ""}</script>
 </body>
 </html>`;
 }
@@ -165,7 +176,7 @@ main{flex:1;display:flex;flex-direction:column;align-items:center;justify-conten
 #links a i{color:var(--muted);font-style:normal}
 .card{border:1px solid var(--rule);border-radius:14px;background:var(--card);overflow:hidden}
 .card img{display:block;width:100%;aspect-ratio:16/9;object-fit:cover;background:var(--rule)}
-.card .ct{padding:10px 12px}.card b{display:block;font-size:16px}.card .sub{color:var(--muted);font-size:13px;margin-top:2px}
+.card .body{white-space:pre-line;margin-top:6px;font-size:15px;line-height:1.5}.card .ct{padding:10px 12px}.card b{display:block;font-size:16px}.card .sub{color:var(--muted);font-size:13px;margin-top:2px}
 .card dl{display:grid;grid-template-columns:auto 1fr;gap:2px 10px;margin:8px 0 0;font-size:13px}.card dt{color:var(--muted)}.card dd{margin:0}
 #links .card a.go{display:block;border:0;border-top:1px solid var(--rule);border-radius:0;padding:9px 12px;color:var(--sig);font-weight:600;text-align:center}
 footer{padding:8px 16px max(14px,env(safe-area-inset-bottom))}
@@ -258,6 +269,8 @@ const ear={
   link:()=>tone([[880,.06],[1320,.08]],{gain:.04,gap:.02}),
   error:()=>tone([[247,.16],[185,.26]],{type:'triangle',gain:.06,gap:.03}),
 };
+for(const [k,v] of Object.entries(CFG.sounds)) ear[k]=()=>tone(v.notes,v);
+const emit=(n,detail)=>dispatchEvent(new CustomEvent('dot:'+n,{detail}));
 const speakingNow=()=>lvl(outLevel)>.02;
 setInterval(()=>{ if(ws&&busy>0&&!speakingNow()) ear.working(); },1600);
 const cueBuf={}, lastTake={};
@@ -268,7 +281,7 @@ async function loadCue(kind){ if(!CFG.cues) return; try{ const n=Math.floor(Math
 function playCue(kind){ const b=cueBuf[kind]; loadCue(kind); if(!b) return Promise.resolve();
   const c=sfxCtx(); c.resume(); const s=c.createBufferSource(); s.buffer=b; s.connect(c.destination); s.start();
   return new Promise(r=>{ s.onended=r; setTimeout(r,(b.duration+.5)*1000); }); }
-let wakingCue=Promise.resolve(), quietStart=false;
+let wakingCue=Promise.resolve(), quietStart=false, greeted=null;
 
 /* audio in: mic to 16 kHz PCM16, 40 ms chunks */
 let inCtx, micStream, inLevel;
@@ -304,16 +317,18 @@ async function start({mic=true,quiet=false}={}){ wantMic=mic; micOpen=false;
     ws.onopen=()=>ws.send(JSON.stringify({setup:{model:tk.model,...(handle?{sessionResumption:{handle}}:{})}}));
     ws.onmessage=async ev=>onMsg(JSON.parse(typeof ev.data==='string'?ev.data:await ev.data.text()));
     ws.onclose=e=>{ const was=!!ws; ws=null; ready=false; dot.classList.remove('on','connecting'); stopMic(); wake?.release?.(); wake=null; micOpen=false;
-      status(e.code===1000?'tap to talk':'disconnected · tap to reconnect'); if(e.code!==1000&&was){ log('t','session closed '+e.code+(e.reason?' · '+e.reason:'')); ear.error(); playCue('lost'); } };
+      status(e.code===1000?'tap to talk':'disconnected · tap to reconnect'); if(e.code!==1000&&was){ log('t','session closed '+e.code+(e.reason?' · '+e.reason:'')); ear.error(); emit('error'); playCue('lost'); } };
   }catch(e){ dot.classList.remove('connecting'); status('tap to talk'); toast('Couldn’t wake '+CFG.name+': '+e.message); ws=null; ear.error(); wakingCue.then(()=>playCue('unreachable')); }
 }
-function stop({bye=false}={}){ if(ws){ const w=ws; ws=null; w.close(1000); if(bye) playCue('bye'); } micOpen=false; flush(); }
+function stop({bye=false}={}){ if(ws){ const w=ws; ws=null; w.close(1000); if(bye){ playCue('bye'); emit('bye'); } } micOpen=false; flush(); }
 async function onMsg(m){
   if(m.setupComplete){ ready=true; $('#dot').classList.remove('connecting'); $('#dot').classList.add('on');
     wake=await navigator.wakeLock?.request('screen').catch(()=>null);
     const mic=micStream?true:wantMic?await startMic().catch(e=>{ toast('Mic: '+e.message); return false; }):false;
     if(mic&&!quietStart){ await wakingCue; await playCue('ready'); }  // only then open the mic, so it doesn't hear itself
-    micOpen=true; if(!mic&&wantMic) status('typing only'); return; }
+    micOpen=true; if(!mic&&wantMic) status('typing only'); emit('ready');
+    if(CFG.greeting&&greeted!==SID&&!quietStart){ greeted=SID; emit('greet'); note(CFG.greeting); }
+    return; }
   if(m.sessionResumptionUpdate?.newHandle) handle=m.sessionResumptionUpdate.newHandle;
   if(m.goAway){ log('t','reconnecting'); playCue('reconnect'); const w=ws; ws=null; w?.close(1000); return start({mic:wantMic,quiet:true}); }
   if(m.toolCall) return tools(m.toolCall.functionCalls||[]);
@@ -332,24 +347,24 @@ function showLink(url,text){ let host; try{ host=new URL(url).hostname; }catch{ 
   const box=$('#links'); box.prepend(a); while(box.children.length>3) box.lastChild.remove(); log('t','🔗 '+(text||url),{url}); ear.link(); }
 
 /* display cards: the screen draws it; a tap on the link hands the https URL to the phone, which opens the app */
-function showCard(c){ const el=document.createElement('div'); el.className='card';
+function showCard(c){ const el=document.createElement('div'); el.className='card'+(/^[a-z0-9-]+$/.test(c.style||'')?' '+c.style:'');
   el.innerHTML=(c.image?'<img src="'+esc(c.image.src)+'" alt="'+esc(c.image.alt)+'">':'')+
-    '<div class="ct"><b>'+esc(c.title)+'</b>'+(c.subtitle?'<div class="sub">'+esc(c.subtitle)+'</div>':'')+
+    '<div class="ct"><b>'+esc(c.title)+'</b>'+(c.subtitle?'<div class="sub">'+esc(c.subtitle)+'</div>':'')+(c.body?'<div class="body">'+esc(c.body)+'</div>':'')+
     (c.lines?.length?'<dl>'+c.lines.map(l=>'<dt>'+esc(l.k)+'</dt><dd>'+esc(l.v)+'</dd>').join('')+'</dl>':'')+'</div>'+
     (c.link&&/^https:/.test(c.link.url)?'<a class="go" href="'+esc(c.link.url)+'" target="_blank" rel="noopener">'+esc(c.link.label)+' ↗</a>':'');
-  const box=$('#links'); box.prepend(el); while(box.children.length>3) box.lastChild.remove(); log('t','🗂 '+c.title,{card:c}); ear.card(); }
+  const box=$('#links'); box.prepend(el); while(box.children.length>3) box.lastChild.remove(); log('t','🗂 '+c.title,{card:c}); ear.card(); emit('card',{card:c}); }
 
 async function call(fc){ const r=await fetch(API+'/tool',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({name:fc.name,args:fc.args||{},safe:demo,session:SID})}); return r.json(); }
 async function tools(calls){ const g=gen;
   const responses=await Promise.all(calls.map(async fc=>{
     const chip=document.createElement('span'); chip.className='chip'; chip.textContent='⟳ '+label(fc.name); $('#chips').append(chip);
-    busy++; ear.tick(); const t0=performance.now(); let result;
+    busy++; ear.tick(); emit('tool',{name:fc.name}); const t0=performance.now(); let result;
     try{ result=await call(fc); }catch(e){ result={error:String(e)}; }
     if(g!==gen) return null; busy--; logTool(fc,result,Math.round(performance.now()-t0));
     if(result?.job){ awaitJob(fc,result.job); result={working:true,note:'This takes a while. The answer will come back by itself; say so and carry on.'}; }
     else if(result?.card&&!result.error){ showCard(result.card); result={shown:true,...(result.card.note?{note:result.card.note}:{})}; }
     else if(result?.url&&result.label&&!result.error){ showLink(result.url,result.label); result={shown:true}; }
-    if(result?.error) ear.error();
+    if(result?.error) ear.error(); emit('done',{name:fc.name,error:!!result?.error});
     chip.className='chip'+(result?.error?' err':''); chip.textContent=(result?.error?'✗ ':'✓ ')+label(fc.name); setTimeout(()=>chip.remove(),6000);
     return {id:fc.id,name:fc.name,response:{result}}; }));
   if(g===gen) ws?.send(JSON.stringify({toolResponse:{functionResponses:responses}})); }
@@ -357,7 +372,7 @@ async function tools(calls){ const g=gen;
 /* slow tools: poll the job, then hand the result back to relay */
 function awaitJob(fc,id){ const t0=Date.now(), g=gen; busy++;
   const tick=async()=>{ if(g!==gen) return; const r=await (await fetch(API+'/job/'+id)).json().catch(()=>({})); if(g!==gen) return;
-    if(r.status!=='done'&&!r.error&&Date.now()-t0<600000) return setTimeout(tick,3000);
+    if(r.status!=='done'&&!r.error&&Date.now()-t0<1800000) return setTimeout(tick,3000);
     busy--; logTool({name:fc.name+' (done)',args:fc.args},r.result??r,Date.now()-t0);
     const msg='The result of '+fc.name+' is back. Tell '+CFG.user+' what it says:\n'+JSON.stringify(r.result??r);
     if(ws&&ready) note(msg); else toast(label(fc.name)+' is ready. Open the log.'); };
