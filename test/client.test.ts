@@ -12,6 +12,12 @@ test("the screen carries the dot's name, labels and install tags", () => {
   assert.match(html, /\/api\/token|API\+'\/token/);
 });
 
+test("the screen can start a fresh session", () => {
+  const html = screen({ name: "me" });
+  assert.match(html, /id="new"/);
+  assert.match(html, /\(clear\|new\)/);
+});
+
 test("config can't close the script tag", () => {
   const html = screen({ name: "x", labels: { a: "</script><script>alert(1)" } });
   assert.equal(html.split("</script>").length, 2);

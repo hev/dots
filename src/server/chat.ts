@@ -58,10 +58,12 @@ export function chat(o: ChatOptions) {
     return { error: "the sub-agent didn't finish in 30 minutes" };
   }
 
+  const keyOf = (ctx: Ctx) => `chat:${o.surface}:${ctx.session}`;
+
   return {
     /** One user message in, the dot's reply out. */
     async turn(ctx: Ctx, text: string, hooks: TurnHooks = {}): Promise<string> {
-      const key = `chat:${o.surface}:${ctx.session}`;
+      const key = keyOf(ctx);
       const history = (((await o.store.get(key)) as Msg[] | undefined) ?? []).slice(-keep);
       const trace: ClientEvent[] = [{ kind: "u", id: `${Date.now()}u`, ts: Date.now(), text }];
       history.push({ role: "user", text });
@@ -99,6 +101,12 @@ export function chat(o: ChatOptions) {
       await o.store.put(key, history.slice(-keep), 7 * 24 * 3600);
       await o.dot.trace(ctx.session, trace);
       return reply;
+    },
+
+    /** Forget the session's history, so the next turn starts fresh. The trace keeps a mark where it ended. */
+    async clear(ctx: Ctx): Promise<void> {
+      await o.store.delete(keyOf(ctx));
+      await o.dot.trace(ctx.session, [{ kind: "t", id: `${Date.now()}c`, ts: Date.now(), text: "cleared" }]);
     },
   };
 }

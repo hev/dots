@@ -72,6 +72,10 @@ const page = screenRoutes({ name: "mine", packs: [places] });
 Static Maps on one key). Map images are served by the dot from ids `show_map`
 made, so the key stays on the server.
 
+**new** on the screen (or `/clear` typed) starts a fresh session: links, cards
+and the log empty, the Live session and its resumption handle go, and the next
+turn gets a new session id. The old session's trace ends with a `cleared` event.
+
 ## Routes
 
 `GET /api/token`, `POST /api/tool`, `POST /api/trace`, `GET /api/job/<id>`.
@@ -100,6 +104,8 @@ A thread is a session: after the first mention, replies in the thread reach the
 dot without another mention. Every tool call goes through the same policy as the
 voice screen, so an act reads back in the thread and runs only on a yes from a
 mapped user. The persona gets `surface: "slack"` to adjust its style.
+`clear` in a thread makes the dot forget it (`chat.clear(ctx)` on any text
+surface); a new thread is a new session anyway.
 
 The app needs Socket Mode, the `app_mention` and `message.groups` events, and the
 bot scopes `app_mentions:read`, `chat:write`, `groups:history` and `reactions:write`.

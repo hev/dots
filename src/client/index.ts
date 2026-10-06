@@ -3,6 +3,8 @@
 // token. Tool calls go to the dot's own /api/tool with the session id, so acts
 // read back and run only on a matching yes; slow tools poll /api/job; display
 // tools ({url, label}) put a link on screen and the model hears only that it's up.
+// "new" (or typing /clear) ends the session: the screen empties, the Live
+// session and its resumption handle go, and the next turn starts a fresh session id.
 //
 // Extracted from hev dot's web/index.html, minus what's hev mind's own (cues,
 // sub-agents, images, dead-air nuggets). A dot serves it with
@@ -55,7 +57,7 @@ ${o.install ? installHead(o.install) : ""}
 <body>
 <div class="app">
   <header><div class="wm">${esc(o.name)}<span class="cur"></span>${o.subtitle ? `<span class="sfx">${esc(o.subtitle)}</span>` : ""}</div>
-    <button id="install" hidden>install</button><button id="mode"></button><button id="logBtn">log</button></header>
+    <button id="install" hidden>install</button><button id="new" title="clear the conversation and start fresh">new</button><button id="mode"></button><button id="logBtn">log</button></header>
   <main>
     <button id="dot" aria-label="talk"><span id="halo"></span><span id="core"></span></button>
     <div id="status">tap to talk</div>
@@ -142,7 +144,7 @@ const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&g
 const keep=(k,v)=>{try{if(v===undefined)return localStorage[k];localStorage[k]=v;}catch{}};
 const label=n=>CFG.labels[n]||n.replace(/_/g,' ');
 function toast(m){ const t=$('#toast'); t.textContent=m; t.classList.add('on'); clearTimeout(t._h); t._h=setTimeout(()=>t.classList.remove('on'),3500); }
-let ws=null, ready=false, handle=null, wantMic=true, micOpen=false, sayText='', youText='', wake=null, busy=0;
+let ws=null, ready=false, handle=null, wantMic=true, micOpen=false, sayText='', youText='', wake=null, busy=0, gen=0;
 
 /* demo vs private: the server refuses private mode to anyone not allowed */
 let demo=keep('demo')!=='0';
@@ -151,8 +153,8 @@ $('#mode').onclick=()=>{ demo=!demo; keep('demo',demo?'1':'0'); drawMode(); if(w
 drawMode();
 
 /* transcript, shipped to /trace every few seconds */
-const SID=(crypto.randomUUID?.()||Date.now().toString(16)+Math.random().toString(16).slice(2)).toLowerCase();
-const trace=[], T0=Date.now(); let unsent=[], seq=0;
+const newSid=()=>(crypto.randomUUID?.()||Date.now().toString(16)+Math.random().toString(16).slice(2)).toLowerCase();
+let SID=newSid(), T0=Date.now(), trace=[], unsent=[], seq=0;
 function rec(e){ e.id=SID.slice(0,8)+'-'+(++seq); e.ts=new Date().toISOString(); trace.push(e); unsent.push(e); }
 function ship(beacon){ if(!unsent.length) return; const body=JSON.stringify({session:SID,events:unsent}); unsent=[];
   if(beacon&&navigator.sendBeacon) navigator.sendBeacon(API+'/trace',new Blob([body],{type:'application/json'}));
@@ -245,22 +247,22 @@ function showCard(c){ const el=document.createElement('div'); el.className='card
   const box=$('#links'); box.prepend(el); while(box.children.length>3) box.lastChild.remove(); log('t','🗂 '+c.title,{card:c}); }
 
 async function call(fc){ const r=await fetch(API+'/tool',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({name:fc.name,args:fc.args||{},safe:demo,session:SID})}); return r.json(); }
-async function tools(calls){
+async function tools(calls){ const g=gen;
   const responses=await Promise.all(calls.map(async fc=>{
     const chip=document.createElement('span'); chip.className='chip'; chip.textContent='⟳ '+label(fc.name); $('#chips').append(chip);
     busy++; const t0=performance.now(); let result;
     try{ result=await call(fc); }catch(e){ result={error:String(e)}; }
-    busy--; logTool(fc,result,Math.round(performance.now()-t0));
+    if(g!==gen) return null; busy--; logTool(fc,result,Math.round(performance.now()-t0));
     if(result?.job){ awaitJob(fc,result.job); result={working:true,note:'This takes a while. The answer will come back by itself; say so and carry on.'}; }
     else if(result?.card&&!result.error){ showCard(result.card); result={shown:true,...(result.card.note?{note:result.card.note}:{})}; }
     else if(result?.url&&result.label&&!result.error){ showLink(result.url,result.label); result={shown:true}; }
     chip.className='chip'+(result?.error?' err':''); chip.textContent=(result?.error?'✗ ':'✓ ')+label(fc.name); setTimeout(()=>chip.remove(),6000);
     return {id:fc.id,name:fc.name,response:{result}}; }));
-  ws?.send(JSON.stringify({toolResponse:{functionResponses:responses}})); }
+  if(g===gen) ws?.send(JSON.stringify({toolResponse:{functionResponses:responses}})); }
 
 /* slow tools: poll the job, then hand the result back to relay */
-function awaitJob(fc,id){ const t0=Date.now(); busy++;
-  const tick=async()=>{ const r=await (await fetch(API+'/job/'+id)).json().catch(()=>({}));
+function awaitJob(fc,id){ const t0=Date.now(), g=gen; busy++;
+  const tick=async()=>{ if(g!==gen) return; const r=await (await fetch(API+'/job/'+id)).json().catch(()=>({})); if(g!==gen) return;
     if(r.status!=='done'&&!r.error&&Date.now()-t0<600000) return setTimeout(tick,3000);
     busy--; logTool({name:fc.name+' (done)',args:fc.args},r.result??r,Date.now()-t0);
     const msg='The result of '+fc.name+' is back. Tell '+CFG.user+' what it says:\n'+JSON.stringify(r.result??r);
@@ -270,7 +272,14 @@ function awaitJob(fc,id){ const t0=Date.now(); busy++;
 const goFull=()=>{ if(!document.fullscreenElement&&!matchMedia('(display-mode: standalone), (display-mode: fullscreen)').matches) document.documentElement.requestFullscreen?.({navigationUI:'hide'}).catch(()=>{}); };
 $('#dot').onclick=async()=>{ if(ws&&ready&&!micStream){ wantMic=true; await startMic().catch(e=>{ toast('Mic: '+e.message); }); }
   else if(ws){ stop(); status('tap to talk'); } else { goFull(); $('#you').textContent=''; $('#say').textContent=''; start(); } };
+/* a fresh session: the old one's trace ships and ends; everything on screen and in the Live session goes */
+function fresh(){ log('t','cleared'); ship(false); gen++; busy=0; stop(); handle=null;
+  SID=newSid(); T0=Date.now(); trace=[]; seq=0;
+  for(const s of ['#list','#links','#chips','#you','#say','#logStats']) $(s).textContent='';
+  $('#log').classList.remove('on'); status('tap to talk'); toast('Fresh start.'); }
+$('#new').onclick=fresh;
 $('#type').onkeydown=async e=>{ if(e.key!=='Enter'||!e.target.value.trim()) return; const t=e.target.value.trim(); e.target.value='';
+  if(/^\/(clear|new)$/i.test(t)) return fresh();
   if(!ws){ await start({mic:false}); await new Promise(r=>{ const i=setInterval(()=>{ if(ready||!ws){ clearInterval(i); r(); } },100); }); }
   if(!ws) return; flush(); log('u',t); $('#you').textContent='“'+t+'”'; sayText=''; $('#say').textContent='';
   ws.send(JSON.stringify({clientContent:{turns:[{role:'user',parts:[{text:t}]}],turnComplete:true}})); };

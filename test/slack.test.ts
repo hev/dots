@@ -18,13 +18,16 @@ const tools = local([
 ]);
 
 /** A model that plays a script: each turn either calls tools or says something, based on the last message. */
-function scripted(): ChatModel & { systems: string[] } {
+function scripted(): ChatModel & { systems: string[]; seen: number[] } {
   const systems: string[] = [];
+  const seen: number[] = [];
   return {
     name: "scripted",
     systems,
+    seen,
     async turn({ system, history }) {
       systems.push(system);
+      seen.push(history.length);
       const last = history[history.length - 1];
       if (last.role === "tool") return { text: `got ${JSON.stringify(last.results.map((r) => r.result))}` };
       if (last.role !== "user") return { text: "?" };
@@ -112,6 +115,18 @@ test("the mention's duplicate message event is answered once", async () => {
   const { say, s } = await setup();
   await say("floor");
   assert.equal(await s.handle({ type: "message", channel: CHANNEL, user: ADAM_SLACK, thread_ts: "100.1", ts: "100.9", text: `<@${BOT}> floor` }), false);
+});
+
+test("clear in a thread forgets it and marks the trace", async () => {
+  const { s, say, posted, model, traces } = await setup();
+  await say("floor");
+  const reply = (text: string, ts: string) => s.handle({ type: "message", channel: CHANNEL, user: ADAM_SLACK, thread_ts: "100.1", ts, text });
+  assert.equal(await reply("clear", "100.2"), true);
+  assert.match(posted.at(-1)!.text, /^Cleared/);
+  await reply("hi", "100.3");
+  assert.equal(model.seen.at(-1), 1, "the next turn starts with only itself");
+  const lines = [...traces.lines.values()][0] as any[];
+  assert.ok(lines.some((l) => l.role === "event" && l.text === "cleared"));
 });
 
 test("display tools post the link; the model hears it was shown", async () => {

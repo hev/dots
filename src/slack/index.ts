@@ -9,6 +9,8 @@
 //   refuses acts, private mode and display tools for them.
 // - An act reads back in the thread and runs only on a yes from an allowed
 //   user, through the same server-side receipts as the voice screen.
+// - "clear" (or "/clear", "new") in a thread makes the dot forget it and start
+//   fresh there; a new thread is a new session anyway.
 
 import type { chat } from "../server/chat.ts";
 import type { Ctx, Store } from "../server/types.ts";
@@ -100,6 +102,12 @@ export function slack(o: SlackOptions) {
     if (!text) return false;
     const ctx: Ctx = { session: await sessionOf(o.channel, thread), who: o.users[e.user] ?? null, demo: o.demo !== false };
     log(`SLACK ${ctx.who ?? e.user} ${text.slice(0, 120)}`);
+
+    if (/^\/?(clear|new)$/i.test(text)) {
+      await o.chat.clear(ctx);
+      await api("chat.postMessage", { channel: o.channel, thread_ts: thread, text: "Cleared. I've forgotten this thread; start fresh." });
+      return true;
+    }
 
     await api("reactions.add", { channel: o.channel, timestamp: e.ts, name: "eyes" });
     let reply: string;
