@@ -46,7 +46,7 @@ export function geminiChat(o: GeminiChatOptions): ChatModel {
           tools: tools.length ? [{ functionDeclarations: declarations(tools) }] : undefined,
         }),
       });
-      if (!res.ok) throw new Error(`gemini answered ${res.status}`);
+      if (!res.ok) throw new Error(`gemini answered ${res.status}: ${(await res.text()).slice(0, 400)}`);
       const data = (await res.json()) as { candidates?: { content?: { parts?: Part[] } }[] };
       const parts = data.candidates?.[0]?.content?.parts ?? [];
       const text = parts.flatMap((p) => ("text" in p ? [p.text] : [])).join("").trim();
