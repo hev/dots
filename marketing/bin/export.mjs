@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 // Public-file allowlist shared by hevdots.com and hev.dev/dots.
+import './build-cases.mjs';
 import { mkdir, copyFile } from 'node:fs/promises';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';

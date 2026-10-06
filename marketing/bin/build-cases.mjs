@@ -1,8 +1,11 @@
 #!/usr/bin/env node
 // Keep the case studies on the same navigation and typography as the home page.
 import {readFile,writeFile} from 'node:fs/promises';
+import {createHash} from 'node:crypto';
 const root=new URL('../dist/',import.meta.url);
-const home=await readFile(new URL('index.html',root),'utf8');
+const revision=createHash('sha256').update(await readFile(new URL('style.css',root))).digest('hex').slice(0,12);
+const home=(await readFile(new URL('index.html',root),'utf8')).replace(/href="style\.css(?:\?[^"]*)?"/, `href="style.css?v=${revision}"`);
+await writeFile(new URL('index.html',root),home);
 const head=home.slice(0,home.indexOf('<main id="main">')).replace('href="#dots"','href="./#dots"');
 const footer=home.slice(home.indexOf('<footer class="wrap footer">'));
 const cases=[
