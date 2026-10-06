@@ -37,6 +37,20 @@ export default { fetch: dot.fetch }; // Workers; on Node, wrap in any fetch serv
 - **Slow tools** return a job handle; the client polls `GET /api/job/<id>`.
 - **Traces** use hev dot's JSONL line format, through a pluggable sink.
 
+## Installing on a phone
+
+`@hevmind/dots/install` makes a dot install as an app: its own icon, no browser
+badge, and Chrome's install prompt. `manifest()` and `installRoutes()` serve a
+manifest with 192, 512 and maskable icons plus a no-cache service worker;
+`installHead()` gives the `<head>` tags; `installPrompt()` drives an install
+button. `installProblems(origin, manifest)` says why a dot won't install.
+
+The one thing code can't fix: **a dot must be on valid HTTPS.** Chrome won't
+register a service worker behind a self-signed certificate, and without one,
+Android makes a shortcut with a Chrome badge. On a tailnet, serve the dot
+through `tailscale serve` (with HTTPS certificates on for the tailnet), not on
+a raw IP.
+
 ## Routes
 
 `GET /api/token`, `POST /api/tool`, `POST /api/trace`, `GET /api/job/<id>`.
