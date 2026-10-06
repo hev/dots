@@ -65,7 +65,7 @@ export function chat(o: ChatOptions) {
       const history = (((await o.store.get(key)) as Msg[] | undefined) ?? []).slice(-keep);
       const trace: ClientEvent[] = [{ kind: "u", id: `${Date.now()}u`, ts: Date.now(), text }];
       history.push({ role: "user", text });
-      const system = await o.dot.persona(ctx.barsafe, o.surface);
+      const system = await o.dot.persona(ctx.demo, o.surface);
 
       let reply = "";
       for (let step = 0; step < maxSteps; step++) {

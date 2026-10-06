@@ -25,8 +25,8 @@ export type SlackOptions = {
   channel: string;
   /** Slack user ID to login. */
   users: Record<string, string>;
-  /** Bar-safe in Slack too unless set false. */
-  barsafe?: boolean;
+  /** Demo mode in Slack too unless set false. */
+  demo?: boolean;
   /** Overridable for tests. */
   api?: SlackApi;
   WebSocket?: typeof WebSocket;
@@ -98,7 +98,7 @@ export function slack(o: SlackOptions) {
 
     const text = (e.text ?? "").replaceAll(mention, "").trim();
     if (!text) return false;
-    const ctx: Ctx = { session: await sessionOf(o.channel, thread), who: o.users[e.user] ?? null, barsafe: o.barsafe !== false };
+    const ctx: Ctx = { session: await sessionOf(o.channel, thread), who: o.users[e.user] ?? null, demo: o.demo !== false };
     log(`SLACK ${ctx.who ?? e.user} ${text.slice(0, 120)}`);
 
     await api("reactions.add", { channel: o.channel, timestamp: e.ts, name: "eyes" });

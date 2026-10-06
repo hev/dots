@@ -21,7 +21,7 @@ async function dot(live = true) {
   const traces = memorySink();
   const d = await defineDot({
     name: "test",
-    persona: ({ capabilities, codebook, barsafe }) => `${barsafe ? "SAFE" : "PRIVATE"}\n${capabilities}\n${codebook}`,
+    persona: ({ capabilities, codebook, demo }) => `${demo ? "SAFE" : "PRIVATE"}\n${capabilities}\n${codebook}`,
     voice,
     tools: [tools],
     identity: async (req) => req.headers.get("x-login"),
@@ -43,7 +43,7 @@ async function dot(live = true) {
   return { d, call, traces };
 }
 
-test("bar-safe redacts amounts, emails and client names", async () => {
+test("demo mode redacts amounts, emails and client names", async () => {
   const { call } = await dot();
   const { body } = await call("pipeline");
   assert.deepEqual(body, { deal: "Acme", value: "$•••", contact: "•••@•••" });
@@ -57,7 +57,7 @@ test("private mode keeps amounts but still needs a login", async () => {
   assert.equal(body.contact, "•••@•••");
 });
 
-test("private-only tools refuse in bar-safe mode", async () => {
+test("private-only tools refuse in demo mode", async () => {
   const { call } = await dot();
   assert.match((await call("bank", {}, { who: ADAM })).body.error, /private-mode only/);
 });

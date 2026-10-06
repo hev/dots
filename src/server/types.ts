@@ -14,7 +14,7 @@ export type JSONSchema = {
 /**
  * - read: answers a question. The default.
  * - act: changes something. Runs only after a read-back and a matching yes.
- * - private: refused in bar-safe mode.
+ * - private: refused in demo mode.
  * - display: the result goes to the screen; the model hears only `{shown: true}`.
  * - slow: returns a job handle at once; the client polls and hands the result back.
  */
@@ -31,7 +31,7 @@ export type Ctx = {
   session: string;
   /** The verified login, or null when the identity adapter can't say who it is. */
   who: string | null;
-  barsafe: boolean;
+  demo: boolean;
 };
 
 export type Tool = ToolDecl & {

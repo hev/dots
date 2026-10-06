@@ -12,7 +12,8 @@
     "./server": "./src/server/index.ts",
     "./gemini-live": "./src/gemini-live/index.ts",
     "./install": "./src/install/index.ts",
-    "./slack": "./src/slack/index.ts"
+    "./slack": "./src/slack/index.ts",
+    "./client": "./src/client/index.ts"
   },
   "scripts": {
     "test": "node --test test/*.test.ts",

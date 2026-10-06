@@ -6,10 +6,10 @@ import { SESSION, toLines, type ClientEvent } from "./traces.ts";
 import type { Ctx, Identity, Store, ToolServer, TraceSink, VoiceProvider } from "./types.ts";
 
 export type PersonaInput = {
-  barsafe: boolean;
+  demo: boolean;
   /** One line per tool, built from the declarations. */
   capabilities: string;
-  /** "Real is Codename; ..." for bar-safe mode. */
+  /** "Real is Codename; ..." for demo mode. */
   codebook: string;
   /** Where the dot is talking: "voice" on the site, or a text surface like "slack". */
   surface: string;
@@ -20,7 +20,7 @@ export type DotOptions = {
   persona: (p: PersonaInput) => string | Promise<string>;
   voice: VoiceProvider;
   tools: ToolServer[];
-  /** Who is calling. Without it, nobody can act or switch bar-safe off. */
+  /** Who is calling. Without it, nobody can act or switch demo mode off. */
   identity?: Identity;
   /** Logins allowed to run acts and private mode. */
   logins?: string[];
@@ -42,7 +42,7 @@ export type Dot = {
   registry: Registry;
   /** One tool call through the whole policy: kinds, logins, receipts, redaction. Every surface goes through this. */
   invoke(name: string, args: Record<string, unknown>, ctx: Ctx, exec?: Exec): Promise<{ status: number; body: unknown }>;
-  persona(barsafe: boolean, surface: string): Promise<string>;
+  persona(demo: boolean, surface: string): Promise<string>;
   /** Writes trace lines through the configured sink, secrets stripped. */
   trace(session: string, events: ClientEvent[]): Promise<void>;
 };
@@ -61,13 +61,13 @@ export async function defineDot(opts: DotOptions): Promise<Dot> {
   const who = async (req: Request) => (opts.identity ? await opts.identity(req) : null);
   const allowed = (w: string | null) => w !== null && logins.has(w);
 
-  const personaFor = async (barsafe: boolean, surface: string) =>
-    opts.persona({ barsafe, capabilities: tools.capabilities(), codebook: r.codebook(), surface });
+  const personaFor = async (demo: boolean, surface: string) =>
+    opts.persona({ demo, capabilities: tools.capabilities(), codebook: r.codebook(), surface });
 
   async function token(req: Request) {
-    const barsafe = new URL(req.url).searchParams.get("safe") !== "0";
-    if (!barsafe && !allowed(await who(req))) return json({ error: "private mode needs an allowed login" }, 403);
-    const persona = await personaFor(barsafe, "voice");
+    const demo = new URL(req.url).searchParams.get("safe") !== "0";
+    if (!demo && !allowed(await who(req))) return json({ error: "private mode needs an allowed login" }, 403);
+    const persona = await personaFor(demo, "voice");
     // Returned raw: the redactor would mask the token.
     return json(await opts.voice.mint({ persona, tools: tools.decls }));
   }
@@ -79,7 +79,7 @@ export async function defineDot(opts: DotOptions): Promise<Dot> {
       safe?: boolean;
       session?: string;
     };
-    const ctx: Ctx = { session: String(a.session ?? ""), who: await who(req), barsafe: a.safe !== false };
+    const ctx: Ctx = { session: String(a.session ?? ""), who: await who(req), demo: a.safe !== false };
     const { status, body } = await invoke(String(a.name ?? ""), a.args ?? {}, ctx, exec);
     return json(body, status);
   }
@@ -89,8 +89,8 @@ export async function defineDot(opts: DotOptions): Promise<Dot> {
     const kind = tools.kind(name);
     const t0 = Date.now();
 
-    if (kind === "private" && ctx.barsafe) return json({ error: "that's private-mode only; switch bar-safe off" });
-    if ((kind === "act" || kind === "display" || !ctx.barsafe) && !allowed(ctx.who)) {
+    if (kind === "private" && ctx.demo) return json({ error: "that's private-mode only; switch demo mode off" });
+    if ((kind === "act" || kind === "display" || !ctx.demo) && !allowed(ctx.who)) {
       return json({ error: `not allowed for ${ctx.who ?? "anonymous"}` }, 403);
     }
     if (kind === "act") {
@@ -103,8 +103,8 @@ export async function defineDot(opts: DotOptions): Promise<Dot> {
       const id = crypto.randomUUID().slice(0, 8);
       await store.put(`job:${id}`, { status: "working" }, 3600);
       const done = tools.call(name, args, ctx).then(
-        (out) => store.put(`job:${id}`, { status: "done", result: out, barsafe: ctx.barsafe }, 3600),
-        (e) => store.put(`job:${id}`, { status: "done", result: { error: String(e) }, barsafe: ctx.barsafe }, 3600),
+        (out) => store.put(`job:${id}`, { status: "done", result: out, demo: ctx.demo }, 3600),
+        (e) => store.put(`job:${id}`, { status: "done", result: { error: String(e) }, demo: ctx.demo }, 3600),
       );
       exec?.waitUntil(done);
       return json({ job: id, status: "working" });
@@ -115,14 +115,14 @@ export async function defineDot(opts: DotOptions): Promise<Dot> {
     log(`TOOL ${ctx.who ?? "-"} ${name} ${JSON.stringify(args).slice(0, 120)} ${Date.now() - t0}ms${err ? " ERROR " + String(err).slice(0, 160) : ""}`);
     // A display result is for the screen (a link, a card); redaction would mangle its URLs.
     if (kind === "display") return json(out);
-    return json(ctx.barsafe ? r.barsafe(out) : r.safe(out));
+    return json(ctx.demo ? r.demo(out) : r.safe(out));
   }
 
   async function job(id: string) {
-    const j = (await store.get(`job:${id}`)) as { status: string; result?: unknown; barsafe?: boolean } | undefined;
+    const j = (await store.get(`job:${id}`)) as { status: string; result?: unknown; demo?: boolean } | undefined;
     if (!j) return json({ error: "no such job" }, 404);
     if (j.status !== "done") return json({ status: j.status });
-    return json({ status: "done", result: j.barsafe === false ? r.safe(j.result) : r.barsafe(j.result) });
+    return json({ status: "done", result: j.demo === false ? r.safe(j.result) : r.demo(j.result) });
   }
 
   async function trace(req: Request) {

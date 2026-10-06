@@ -1,6 +1,6 @@
-// Bar-safe: nothing secret or client-identifying reaches the model. Ported
+// Demo mode: nothing secret or client-identifying reaches the model. Ported
 // from hev dot's safe()/private(). Secrets and contact details always go;
-// amounts go too in bar-safe mode.
+// amounts go too in demo mode.
 
 const SECRETS: [RegExp, string][] = [
   [/op:\/\/[^\s'"`)]+/g, "op://•••"],
@@ -32,8 +32,8 @@ export type RedactOptions = {
 export type Redactor = {
   /** Secrets, contact details and codenames. Always applied. */
   safe<T>(x: T): T;
-  /** safe() plus amounts. Applied in bar-safe mode. */
-  barsafe<T>(x: T): T;
+  /** safe() plus amounts. Applied in demo mode. */
+  demo<T>(x: T): T;
   /** "Real is Codename; ..." for the persona, so the dot can map names it hears. */
   codebook(): string;
 };
@@ -61,7 +61,7 @@ export function redactor(opts: RedactOptions = {}): Redactor {
 
   return {
     safe: <T>(x: T) => walk(x, scrub) as T,
-    barsafe: <T>(x: T) => walk(x, (s) => scrub(s).replace(MONEY, "$$•••")) as T,
+    demo: <T>(x: T) => walk(x, (s) => scrub(s).replace(MONEY, "$$•••")) as T,
     codebook() {
       const seen = new Map<string, [string, string]>();
       for (const [k, v] of Object.entries(codenames)) if (!seen.has(k.toLowerCase())) seen.set(k.toLowerCase(), [k, v]);

@@ -11,7 +11,7 @@ import { geminiLive } from "@hevmind/dots/gemini-live";
 
 const dot = await defineDot({
   name: "mine",
-  persona: ({ capabilities, barsafe }) => `You are a dot. You can:\n${capabilities}`,
+  persona: ({ capabilities, demo }) => `You are a dot. You can:\n${capabilities}`,
   voice: geminiLive({ apiKey: process.env.GEMINI_API_KEY! }),
   tools: [
     local([defineTool({ name: "today", description: "Today's plan.", run: () => ({ plan: "..." }) })]),
@@ -31,8 +31,8 @@ export default { fetch: dot.fetch }; // Workers; on Node, wrap in any fetch serv
   for those exact arguments and returns a read-back. `confirmed: true` runs only
   against a matching receipt, once. A changed draft needs a new yes. Unless
   `live: true`, confirmed acts dry-run.
-- **Bar-safe by default.** Every tool result is scrubbed before the model sees it:
-  secrets, emails, IPs and codenamed clients, plus amounts in bar-safe mode.
+- **Demo mode by default.** Every tool result is scrubbed before the model sees it:
+  secrets, emails, IPs and codenamed clients, plus amounts in demo mode.
   Private mode, acts and display results need an allowed login.
 - **Slow tools** return a job handle; the client polls `GET /api/job/<id>`.
 - **Traces** use hev dot's JSONL line format, through a pluggable sink.

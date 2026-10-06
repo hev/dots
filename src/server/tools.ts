@@ -37,7 +37,7 @@ export function http(opts: {
       const res = await fetch(opts.url, {
         method: "POST",
         headers: { "content-type": "application/json", ...(opts.headers?.(ctx) ?? {}) },
-        body: JSON.stringify({ name, args, safe: ctx.barsafe, session: ctx.session }),
+        body: JSON.stringify({ name, args, safe: ctx.demo, session: ctx.session }),
       });
       if (!res.ok) return { error: `tool server answered ${res.status}` };
       return res.json();
