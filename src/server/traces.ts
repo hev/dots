@@ -1,0 +1,46 @@
+import type { TraceLine } from "./types.ts";
+
+/** What the client ships: `u` (user), `d` (dot) and `tool` events. */
+export type ClientEvent = {
+  kind: "u" | "d" | "tool" | string;
+  id?: string | number;
+  ts?: string | number;
+  text?: string;
+  model?: string;
+  name?: string;
+  args?: unknown;
+  result?: unknown;
+  error?: unknown;
+  ms?: number;
+};
+
+export const SESSION = /^[0-9a-f-]{8,40}$/;
+
+/** Client events to trace lines, in hev dot's JSONL format. Capped like hev dot's. */
+export function toLines(session: string, events: ClientEvent[]): TraceLine[] {
+  return events.slice(0, 200).map((e) => {
+    const id = String(e.id ?? "").slice(0, 40);
+    const line: TraceLine = {
+      session_id: session,
+      id,
+      ts: e.ts ?? null,
+      role: e.kind === "u" ? "user" : e.kind === "d" || e.kind === "tool" ? "assistant" : "event",
+      text: String(e.text ?? "").slice(0, 8000),
+      model: e.model ?? null,
+    };
+    if (e.kind === "tool") {
+      line.text = "";
+      line.tool_calls = [
+        {
+          id,
+          name: String(e.name ?? ""),
+          args: e.args ?? null,
+          result: JSON.stringify(e.result ?? null).slice(0, 8000),
+          is_error: Boolean(e.error),
+          duration_ms: e.ms ?? null,
+        },
+      ];
+    }
+    return line;
+  });
+}

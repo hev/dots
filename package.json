@@ -1,0 +1,21 @@
+{
+  "name": "@hevmind/dots",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Voice-first assistants over your own sources. Every fact from a real source; actions only after a spoken yes.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "engines": { "node": ">=22.18" },
+  "exports": {
+    "./server": "./src/server/index.ts",
+    "./gemini-live": "./src/gemini-live/index.ts"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.ts",
+    "check": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.0",
+    "@types/node": "^22.0.0"
+  }
+}
