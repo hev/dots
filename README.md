@@ -137,6 +137,18 @@ seen by a typed turn); otherwise they go with the next typed question, as
 `images` on `POST /api/chat` (up to four, JPEG, PNG or WebP, under 5 MB each).
 The chat history keeps the photos of the last two messages that had them.
 
+## Themes, haiku and restyling
+
+`@hevmind/dots/theme` is a `Theme` type: everything about how a dot looks, sounds
+and greets its person, as data (`screenOptions(theme)` makes the screen options).
+`@hevmind/dots/haiku` gives `show_haiku`, a card the theme styles, and
+`HAIKU_CRAFT` for the persona; a greeting like "open with a haiku" uses it.
+`@hevmind/dots/restyle` lets the person redecorate the dot out loud: `restyle`
+starts a factory session that rebuilds `theme/` and `web/` and opens a PR, and
+`ship_theme`, after a yes, ships it only if every file is under those two and
+the theme code passes `themeProblems()`. hev/dasha is the reference repo shape.
+`memo` (from `/server`) caches slow outside calls and shares calls in flight.
+
 ## Routes
 
 `GET /api/token`, `POST /api/tool`, `POST /api/chat`, `POST /api/trace`, `GET /api/job/<id>`, `GET /api/info`.

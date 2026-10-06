@@ -15,7 +15,10 @@
     "./slack": "./src/slack/index.ts",
     "./client": "./src/client/index.ts",
     "./maps": "./src/maps/index.ts",
-    "./cues": "./src/cues/index.ts"
+    "./cues": "./src/cues/index.ts",
+    "./theme": "./src/theme/index.ts",
+    "./haiku": "./src/haiku/index.ts",
+    "./restyle": "./src/restyle/index.ts"
   },
   "scripts": {
     "test": "node --test test/*.test.ts",
