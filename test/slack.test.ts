@@ -136,6 +136,11 @@ test("slack turns are traced in hev dot's format", async () => {
   assert.equal(lines[1].tool_calls[0].name, "floor_status");
 });
 
+test("gemini model turns go back as they came, thought signatures and all", () => {
+  const raw = [{ functionCall: { name: "floor_status", args: {} }, thoughtSignature: "sig" }];
+  assert.deepEqual(contents([{ role: "model", calls: [], raw }])[0], { role: "model", parts: raw });
+});
+
 test("gemini contents map calls and results", () => {
   const c = contents([
     { role: "user", text: "hi" },

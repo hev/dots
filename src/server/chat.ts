@@ -11,13 +11,14 @@ export type Call = { id: string; name: string; args: Record<string, unknown> };
 
 export type Msg =
   | { role: "user"; text: string }
-  | { role: "model"; text?: string; calls?: Call[] }
+  /** `raw` is the provider's own turn, sent back as-is (Gemini 3 needs its thought signatures returned). */
+  | { role: "model"; text?: string; calls?: Call[]; raw?: unknown }
   | { role: "tool"; results: { id: string; name: string; result: unknown }[] };
 
 /** A text model with function calling. */
 export type ChatModel = {
   name: string;
-  turn(req: { system: string; history: Msg[]; tools: ToolDecl[] }): Promise<{ text?: string; calls?: Call[] }>;
+  turn(req: { system: string; history: Msg[]; tools: ToolDecl[] }): Promise<{ text?: string; calls?: Call[]; raw?: unknown }>;
 };
 
 export type ChatOptions = {
@@ -69,7 +70,7 @@ export function chat(o: ChatOptions) {
       let reply = "";
       for (let step = 0; step < maxSteps; step++) {
         const out = await o.model.turn({ system, history, tools: o.dot.registry.decls });
-        history.push({ role: "model", text: out.text, calls: out.calls });
+        history.push({ role: "model", text: out.text, calls: out.calls, raw: out.raw });
         if (!out.calls?.length) {
           reply = out.text ?? "";
           break;

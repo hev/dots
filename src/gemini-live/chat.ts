@@ -15,6 +15,7 @@ export function contents(history: Msg[]) {
   return history.map((m) => {
     if (m.role === "user") return { role: "user", parts: [{ text: m.text }] as Part[] };
     if (m.role === "model") {
+      if (Array.isArray(m.raw)) return { role: "model", parts: m.raw as Part[] };
       const parts: Part[] = [];
       if (m.text) parts.push({ text: m.text });
       for (const c of m.calls ?? []) parts.push({ functionCall: { name: c.name, args: c.args } });
@@ -53,7 +54,7 @@ export function geminiChat(o: GeminiChatOptions): ChatModel {
       const calls = parts.flatMap((p, i) =>
         "functionCall" in p ? [{ id: `c${Date.now()}${i}`, name: p.functionCall.name, args: p.functionCall.args ?? {} }] : [],
       );
-      return { text: text || undefined, calls: calls.length ? calls : undefined };
+      return { text: text || undefined, calls: calls.length ? calls : undefined, raw: parts };
     },
   };
 }
