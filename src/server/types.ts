@@ -27,6 +27,22 @@ export type ToolDecl = {
   kind?: Kind;
 };
 
+/**
+ * What a display tool returns as `{ card }`: the screen draws it, and the model
+ * hears only that it's up, plus `note` if there is one. A link is a plain https
+ * URL, so on a phone it opens the app that owns it (Maps, YouTube Music...).
+ */
+export type Card = {
+  title: string;
+  subtitle?: string;
+  lines?: { k: string; v: string }[];
+  /** Served by the dot or a public URL; never one carrying a key. */
+  image?: { src: string; alt: string };
+  link?: { url: string; label: string };
+  /** For the model only: what to say about the card now that it's up. */
+  note?: string;
+};
+
 export type Ctx = {
   session: string;
   /** The verified login, or null when the identity adapter can't say who it is. */
@@ -42,6 +58,20 @@ export type Tool = ToolDecl & {
 export type ToolServer = {
   list(): Promise<ToolDecl[]>;
   call(name: string, args: Record<string, unknown>, ctx: Ctx): Promise<unknown>;
+};
+
+/**
+ * A pack: one integration a dot plugs in whole (maps, a bank, a calendar). The
+ * tools go through the same policy as any other; routes serve what the tools
+ * hand the screen (a map image, say) so keys stay on the server; guidance is a
+ * few lines the persona gets about using them; labels name them on the chips.
+ */
+export type Pack = {
+  name: string;
+  tools: ToolServer;
+  routes?: (req: Request) => Response | null | Promise<Response | null>;
+  guidance?: string;
+  labels?: Record<string, string>;
 };
 
 /** Says who is on the other end of a request, e.g. a Tailscale login or a Clerk user. */

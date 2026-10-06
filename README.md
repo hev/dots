@@ -51,6 +51,27 @@ Android makes a shortcut with a Chrome badge. On a tailnet, serve the dot
 through `tailscale serve` (with HTTPS certificates on for the tailnet), not on
 a raw IP.
 
+## Packs and cards
+
+A pack is one integration plugged in whole: its tools (under the same policy as
+any other), the routes they need, a few lines of persona guidance, and chip
+labels. A display tool returns `{ card }`: a title, a few lines, an image and a
+link. The screen draws it, and the model hears only that it's up. Card links are
+plain https, so on a phone they open the app that owns them.
+
+```ts
+import { maps } from "@hevmind/dots/maps";
+import { screenRoutes } from "@hevmind/dots/client";
+
+const places = maps({ apiKey: process.env.MAPS_API_KEY!, home: "Boulder, CO" });
+const dot = await defineDot({ /* ... */ tools: [], packs: [places] });
+const page = screenRoutes({ name: "mine", packs: [places] });
+```
+
+`maps()` gives `find_place`, `travel_time` and `show_map` (Places, Routes and
+Static Maps on one key). Map images are served by the dot from ids `show_map`
+made, so the key stays on the server.
+
 ## Routes
 
 `GET /api/token`, `POST /api/tool`, `POST /api/trace`, `GET /api/job/<id>`.

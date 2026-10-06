@@ -3,7 +3,7 @@ import { redactor, type RedactOptions } from "./redact.ts";
 import { memoryStore } from "./stores.ts";
 import { registry, type Registry } from "./tools.ts";
 import { SESSION, toLines, type ClientEvent } from "./traces.ts";
-import type { Ctx, Identity, Store, ToolServer, TraceSink, VoiceProvider } from "./types.ts";
+import type { Ctx, Identity, Pack, Store, ToolServer, TraceSink, VoiceProvider } from "./types.ts";
 
 export type PersonaInput = {
   demo: boolean;
@@ -13,6 +13,8 @@ export type PersonaInput = {
   codebook: string;
   /** Where the dot is talking: "voice" on the site, or a text surface like "slack". */
   surface: string;
+  /** Each pack's guidance, one block per pack. Empty without packs. */
+  guidance: string;
 };
 
 export type DotOptions = {
@@ -20,6 +22,8 @@ export type DotOptions = {
   persona: (p: PersonaInput) => string | Promise<string>;
   voice: VoiceProvider;
   tools: ToolServer[];
+  /** Integrations plugged in whole: their tools, routes and persona guidance. */
+  packs?: Pack[];
   /** Who is calling. Without it, nobody can act or switch demo mode off. */
   identity?: Identity;
   /** Logins allowed to run acts and private mode. */
@@ -51,7 +55,9 @@ const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 
 export async function defineDot(opts: DotOptions): Promise<Dot> {
-  const tools = await registry(opts.tools);
+  const packs = opts.packs ?? [];
+  const tools = await registry([...opts.tools, ...packs.map((p) => p.tools)]);
+  const guidance = packs.filter((p) => p.guidance).map((p) => `${p.name}:\n${p.guidance}`).join("\n\n");
   const r = redactor(opts.redact);
   const store = opts.store ?? memoryStore();
   const logins = new Set(opts.logins ?? []);
@@ -62,7 +68,7 @@ export async function defineDot(opts: DotOptions): Promise<Dot> {
   const allowed = (w: string | null) => w !== null && logins.has(w);
 
   const personaFor = async (demo: boolean, surface: string) =>
-    opts.persona({ demo, capabilities: tools.capabilities(), codebook: r.codebook(), surface });
+    opts.persona({ demo, capabilities: tools.capabilities(), codebook: r.codebook(), surface, guidance });
 
   async function token(req: Request) {
     const demo = new URL(req.url).searchParams.get("safe") !== "0";
@@ -145,6 +151,10 @@ export async function defineDot(opts: DotOptions): Promise<Dot> {
     persona: personaFor,
     trace: writeTrace,
     async fetch(req, _env, exec) {
+      for (const pk of packs) {
+        const out = await pk.routes?.(req);
+        if (out) return out;
+      }
       const p = new URL(req.url).pathname;
       if (!p.startsWith(base + "/")) return json({ error: "no" }, 404);
       const route = p.slice(base.length);

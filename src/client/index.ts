@@ -9,6 +9,7 @@
 // `screenRoutes(opts)`, chained ahead of `dot.fetch`.
 
 import { installHead, type InstallOptions } from "../install/index.ts";
+import type { Pack } from "../server/types.ts";
 
 export type ScreenOptions = {
   /** Shown as the wordmark and the page title. */
@@ -19,6 +20,8 @@ export type ScreenOptions = {
   user?: string;
   /** Friendly names for tools on the chips, e.g. { spend: "your spending" }. */
   labels?: Record<string, string>;
+  /** The dot's packs, for their chip labels. */
+  packs?: Pack[];
   /** The dot's routes. Default "/api". */
   base?: string;
   /** Accent color. Default hev dot's signal orange. */
@@ -34,7 +37,7 @@ export function screen(o: ScreenOptions): string {
   const cfg = {
     name: o.name,
     user: o.user ?? "the user",
-    labels: o.labels ?? {},
+    labels: Object.assign({}, ...(o.packs ?? []).map((p) => p.labels ?? {}), o.labels),
     base: o.base ?? "/api",
   };
   // JSON inside <script> must not close the tag.
@@ -110,6 +113,11 @@ main{flex:1;display:flex;flex-direction:column;align-items:center;justify-conten
 #links{display:flex;flex-direction:column;gap:6px;width:100%}
 #links a{display:flex;justify-content:space-between;padding:10px 12px;border:1px solid var(--rule);border-radius:12px;background:var(--card);color:var(--ink);text-decoration:none}
 #links a i{color:var(--muted);font-style:normal}
+.card{border:1px solid var(--rule);border-radius:14px;background:var(--card);overflow:hidden}
+.card img{display:block;width:100%;aspect-ratio:16/9;object-fit:cover;background:var(--rule)}
+.card .ct{padding:10px 12px}.card b{display:block;font-size:16px}.card .sub{color:var(--muted);font-size:13px;margin-top:2px}
+.card dl{display:grid;grid-template-columns:auto 1fr;gap:2px 10px;margin:8px 0 0;font-size:13px}.card dt{color:var(--muted)}.card dd{margin:0}
+#links .card a.go{display:block;border:0;border-top:1px solid var(--rule);border-radius:0;padding:9px 12px;color:var(--sig);font-weight:600;text-align:center}
 footer{padding:8px 16px max(14px,env(safe-area-inset-bottom))}
 #type{width:100%;font:inherit;font-size:16px;padding:11px 14px;border-radius:99px;border:1px solid var(--rule);background:var(--card);color:var(--ink)}
 #log{position:absolute;inset:0;background:var(--paper);display:none;flex-direction:column}
@@ -228,6 +236,14 @@ function showLink(url,text){ let host; try{ host=new URL(url).hostname; }catch{ 
   const a=document.createElement('a'); a.href=url; a.target='_blank'; a.rel='noopener'; a.innerHTML='<span>'+esc(text||host)+'</span><i>'+esc(host)+' ↗</i>';
   const box=$('#links'); box.prepend(a); while(box.children.length>3) box.lastChild.remove(); log('t','🔗 '+(text||url),{url}); }
 
+/* display cards: the screen draws it; a tap on the link hands the https URL to the phone, which opens the app */
+function showCard(c){ const el=document.createElement('div'); el.className='card';
+  el.innerHTML=(c.image?'<img src="'+esc(c.image.src)+'" alt="'+esc(c.image.alt)+'">':'')+
+    '<div class="ct"><b>'+esc(c.title)+'</b>'+(c.subtitle?'<div class="sub">'+esc(c.subtitle)+'</div>':'')+
+    (c.lines?.length?'<dl>'+c.lines.map(l=>'<dt>'+esc(l.k)+'</dt><dd>'+esc(l.v)+'</dd>').join('')+'</dl>':'')+'</div>'+
+    (c.link&&/^https:/.test(c.link.url)?'<a class="go" href="'+esc(c.link.url)+'" target="_blank" rel="noopener">'+esc(c.link.label)+' ↗</a>':'');
+  const box=$('#links'); box.prepend(el); while(box.children.length>3) box.lastChild.remove(); log('t','🗂 '+c.title,{card:c}); }
+
 async function call(fc){ const r=await fetch(API+'/tool',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({name:fc.name,args:fc.args||{},safe:demo,session:SID})}); return r.json(); }
 async function tools(calls){
   const responses=await Promise.all(calls.map(async fc=>{
@@ -236,6 +252,7 @@ async function tools(calls){
     try{ result=await call(fc); }catch(e){ result={error:String(e)}; }
     busy--; logTool(fc,result,Math.round(performance.now()-t0));
     if(result?.job){ awaitJob(fc,result.job); result={working:true,note:'This takes a while. The answer will come back by itself; say so and carry on.'}; }
+    else if(result?.card&&!result.error){ showCard(result.card); result={shown:true,...(result.card.note?{note:result.card.note}:{})}; }
     else if(result?.url&&result.label&&!result.error){ showLink(result.url,result.label); result={shown:true}; }
     chip.className='chip'+(result?.error?' err':''); chip.textContent=(result?.error?'✗ ':'✓ ')+label(fc.name); setTimeout(()=>chip.remove(),6000);
     return {id:fc.id,name:fc.name,response:{result}}; }));
