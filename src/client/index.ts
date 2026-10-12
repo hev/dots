@@ -13,12 +13,16 @@
 // lines in the dot's own voice (from cueRoutes) mark waking, ready, bye and a
 // lost line, so it can be followed in headphones.
 //
+// Apps (ScreenOptions.apps) are the dot's own views mounted over the chat in this
+// same page; see apps.ts. While one is open the orb becomes a pill, and back closes it.
+//
 // Extracted from hev dot's web/index.html, minus what's hev mind's own
 // (sub-agents, images, dead-air nuggets). A dot serves it with
 // `screenRoutes(opts)`, chained ahead of `dot.fetch`.
 
 import { installHead, type InstallOptions } from "../install/index.ts";
-import type { Pack } from "../server/types.ts";
+import type { Pack, Version } from "../server/types.ts";
+import { APPS } from "./apps.ts";
 
 export type ScreenOptions = {
   /** Shown as the wordmark and the page title. */
@@ -59,8 +63,28 @@ export type ScreenOptions = {
   };
   /** Sent to the model, as a note from the app, when a fresh session is ready (not on a reconnect), e.g. "Open with a haiku". */
   greeting?: string;
+  /** Named views mounted over the chat in the same page; the session carries on underneath. Open one from the
+   *  `open_app` tool (appTools), a card's `app`, or `window.dotApps.open(name)`; back, the pill or a voice
+   *  close ends it. Trusted strings from the dot's author. */
+  apps?: Record<string, AppDef>;
+  /** The running build (gitVersion in /version). Shows a small tag, short sha · date, that copies the commit on tap. */
+  version?: Version;
   /** The dot's own earcons: notes as [hz, seconds], with an oscillator type, gain and gap. */
   sounds?: Partial<Record<"tick" | "working" | "card" | "link" | "error", Sound>>;
+};
+
+/** An app is HTML and/or JS the dot owns. The screen gives it a container and `dot:*` events. */
+export type AppDef = {
+  /** Shown in the app's accessible name. */
+  title: string;
+  /** Markup put in the container when it opens. */
+  html?: string;
+  /** CSS for the app, added to the page. Scope it to `[data-app="name"]`. */
+  css?: string;
+  /** A function body, called with (el, api) on open; may return a cleanup function. */
+  script?: string;
+  /** A URL to an ES module whose `mount(el, api)` runs on open; may return a cleanup function. */
+  module?: string;
 };
 
 export type Sound = { notes: [number, number][]; type?: "sine" | "triangle" | "square" | "sawtooth"; gain?: number; gap?: number };
@@ -89,6 +113,8 @@ export function screen(o: ScreenOptions): string {
     cues: !!o.cues,
     greeting: o.greeting ?? null,
     sounds: o.sounds ?? {},
+    apps: Object.fromEntries(Object.entries(o.apps ?? {}).map(([k, a]) => [k, { title: a.title, html: a.html, script: a.script, module: a.module }])),
+    version: o.version ? { commit: o.version.commit, short: o.version.short, built: o.version.built } : null,
   };
   // JSON inside <script> must not close the tag.
   const json = JSON.stringify(cfg).replace(/</g, "\\u003c");
@@ -101,7 +127,7 @@ export function screen(o: ScreenOptions): string {
 ${o.install ? installHead(o.install) : ""}
 <title>${esc(o.name)}</title>
 ${o.design?.head ?? ""}
-<style>${CSS.replace("__ACCENT__", accent)}${theme(o.theme)}${o.design?.css ?? ""}</style>
+<style>${CSS.replace("__ACCENT__", accent)}${theme(o.theme)}${Object.values(o.apps ?? {}).map((a) => a.css ?? "").join("")}${o.design?.css ?? ""}</style>
 </head>
 <body>
 <div class="app">
@@ -117,6 +143,9 @@ ${o.design?.decor ? `<div id="decor" aria-hidden="true">${o.design.decor}</div>`
   <footer><div id="pending"></div><div class="row"><button id="attach" aria-label="add a photo" title="add a photo">📷</button><input id="photo" type="file" accept="image/*" multiple hidden><input id="type" placeholder="or type" autocomplete="off"></div></footer>
   <section id="log"><div class="bar"><span id="logStats"></span><button id="copyLog">copy</button><button id="logClose">close</button></div><div id="list"></div></section>
   <section id="info"><div class="bar"><span>${esc(o.name)}</span><button id="infoClose">close</button></div><div id="about"></div></section>
+  <section id="apps" aria-label="app"></section>
+  <button id="pill" aria-label="back to chat" hidden><i id="pillDot"></i><span id="pillText"></span></button>
+  ${o.version ? `<button id="ver" title="copy the commit">${esc(o.version.short)} · ${esc(o.version.built.slice(0, 10))}</button>` : ""}
   <div id="toast"></div>
 </div>
 <script>const CFG=${json};
@@ -206,12 +235,23 @@ footer .row{display:flex;gap:8px;align-items:center}
 #toast.on{opacity:1}
 #decor{position:absolute;inset:0;pointer-events:none;overflow:hidden;z-index:0}
 header,main,footer{position:relative;z-index:1}
-#log,#info,#toast{z-index:2}
+#log,#info{z-index:2}#toast{z-index:6}
+#apps{position:absolute;inset:0;z-index:3;background:var(--paper);display:none;flex-direction:column}
+#apps.on{display:flex}
+.app-view{flex:1;min-height:0;overflow:auto;padding:max(54px,calc(env(safe-area-inset-top) + 40px)) 16px 20px}
+#pill{position:absolute;z-index:5;top:max(10px,env(safe-area-inset-top));right:12px;display:flex;align-items:center;gap:7px;background:var(--card);padding:5px 12px 5px 8px}
+#pill[hidden]{display:none}
+#pillDot{width:14px;height:14px;border-radius:50%;background:var(--ink);transition:background .2s,transform .08s}
+#pill.on #pillDot{background:var(--sig);box-shadow:0 0 8px 2px color-mix(in srgb,var(--sig) 60%,transparent)}
+#pill.connecting #pillDot{animation:pulse 1s ease-in-out infinite}
+#pillText{font:500 12px var(--mono);color:var(--muted);max-width:42vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#ver{position:absolute;z-index:5;left:8px;bottom:0;border:0;border-radius:6px;padding:1px 5px;font:10px var(--mono);color:var(--muted);opacity:.75}
 `;
 
 // Plain browser JS. CFG comes from the server. Kept in step with hev dot's
 // web/index.html for the audio and Live session plumbing.
 const SCRIPT = String.raw`
+${APPS}
 const $=s=>document.querySelector(s), API=CFG.base;
 const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const keep=(k,v)=>{try{if(v===undefined)return localStorage[k];localStorage[k]=v;}catch{}};
@@ -230,6 +270,7 @@ drawMode();
 const newSid=()=>(crypto.randomUUID?.()||Date.now().toString(16)+Math.random().toString(16).slice(2)).toLowerCase();
 let SID=newSid(), T0=Date.now(), trace=[], unsent=[], seq=0;
 function rec(e){ e.id=SID.slice(0,8)+'-'+(++seq); e.ts=new Date().toISOString(); trace.push(e); unsent.push(e); }
+const markStart=()=>rec({t:0,kind:'start'}); markStart();
 function ship(beacon){ if(!unsent.length) return; const body=JSON.stringify({session:SID,events:unsent}); unsent=[];
   if(beacon&&navigator.sendBeacon) navigator.sendBeacon(API+'/trace',new Blob([body],{type:'application/json'}));
   else fetch(API+'/trace',{method:'POST',headers:{'content-type':'application/json'},body,keepalive:true}).catch(()=>{}); }
@@ -309,6 +350,8 @@ const status=t=>$('#status').textContent=t;
 (function anim(){ const o=lvl(outLevel), i=lvl(inLevel), speaking=o>.02, hearing=ready&&!speaking&&i>.05;
   if(ws&&ready) status(busy?'checking…':speaking?CFG.name:hearing?'hearing you':micStream?'listening':'typing · tap to talk');
   $('#halo').style.transform='scale('+(1+o*.35+(hearing?Math.min(i,.2):0))+')'; $('#core').style.transform='scale('+(1+o*.06)+')';
+  if(document.body.classList.contains('app-open')){ const p=$('#pill'); p.classList.toggle('on',!!(ws&&ready)); p.classList.toggle('connecting',$('#dot').classList.contains('connecting'));
+    $('#pillText').textContent=$('#status').textContent; $('#pillDot').style.transform='scale('+(1+o*.5+(hearing?Math.min(i,.3):0))+')'; }
   requestAnimationFrame(anim); })();
 
 function note(text){ ws?.send(JSON.stringify({clientContent:{turns:[{role:'user',parts:[{text:'[note from the app, not from '+CFG.user+'] '+text}]}],turnComplete:true}})); }
@@ -358,6 +401,7 @@ function showCard(c){ const el=document.createElement('div'); el.className='card
   el.innerHTML=(c.image?'<img src="'+esc(c.image.src)+'" alt="'+esc(c.image.alt)+'">':'')+
     '<div class="ct"><b>'+esc(c.title)+'</b>'+(c.subtitle?'<div class="sub">'+esc(c.subtitle)+'</div>':'')+(c.body?'<div class="body">'+esc(c.body)+'</div>':'')+
     (c.lines?.length?'<dl>'+c.lines.map(l=>'<dt>'+esc(l.k)+'</dt><dd>'+esc(l.v)+'</dd>').join('')+'</dl>':'')+'</div>'+
+    (c.app&&CFG.apps[c.app.name]?'<a class="go" href="#app/'+esc(c.app.name)+'" data-app="'+esc(c.app.name)+'">'+esc(c.app.label)+'</a>':'')+
     (c.link&&/^https:/.test(c.link.url)?'<a class="go" href="'+esc(c.link.url)+'" target="_blank" rel="noopener">'+esc(c.link.label)+' ↗</a>':'');
   const box=$('#links'); box.prepend(el); while(box.children.length>3) box.lastChild.remove(); log('t','🗂 '+c.title,{card:c}); ear.card(); emit('card',{card:c}); }
 
@@ -371,6 +415,8 @@ async function tools(calls){ const g=gen;
     if(result?.job){ awaitJob(fc,result.job); result={working:true,note:'This takes a while. The answer will come back by itself; say so and carry on.'}; }
     else if(result?.card&&!result.error){ showCard(result.card); result={shown:true,...(result.card.note?{note:result.card.note}:{})}; }
     else if(result?.url&&result.label&&!result.error){ showLink(result.url,result.label); result={shown:true}; }
+    else if(result?.app&&!result.error){ const ok=openApp(result.app); result=ok?{shown:true,...(result.note?{note:result.note}:{})}:{error:'no app called '+result.app}; }
+    else if(result?.close_app&&!result.error){ closeApp(); result={shown:true}; }
     if(result?.error) ear.error(); emit('done',{name:fc.name,error:!!result?.error});
     chip.className='chip'+(result?.error?' err':''); chip.textContent=(result?.error?'✗ ':'✓ ')+label(fc.name); setTimeout(()=>chip.remove(),6000);
     return {id:fc.id,name:fc.name,response:{result}}; }));
@@ -401,7 +447,7 @@ async function ask(t){ const g=gen; if(ws){ stop(); }
   for(;;){ const {value,done}=await rd.read(); if(g!==gen) return true; if(done) break; buf+=dec.decode(value,{stream:true});
     let i; while((i=buf.indexOf('\n'))>=0){ const line=buf.slice(0,i); buf=buf.slice(i+1); if(!line.trim()) continue; const m=JSON.parse(line);
       if(m.slow){ status('asking a sub-agent…'); const c=document.createElement('span'); c.className='chip'; c.textContent='⟳ '+label(m.slow); $('#chips').append(c); chips.push(c); }
-      if(m.display){ if(m.display.card) showCard(m.display.card); else if(m.display.url) showLink(m.display.url,m.display.label); }
+      if(m.display){ if(m.display.card) showCard(m.display.card); else if(m.display.url) showLink(m.display.url,m.display.label); else if(m.display.app) openApp(m.display.app); else if(m.display.close_app) closeApp(); }
       if(m.error){ $('#say').textContent=''; show('t','✗ '+m.error); toast(m.error); }
       if(m.reply){ $('#say').textContent=m.reply; show('d',m.reply); } } }
   chips.forEach(c=>c.remove()); status('tap to talk'); return true; }
@@ -427,8 +473,8 @@ $('#photo').onchange=async e=>{ const files=[...e.target.files].slice(0,4-pendin
   drawPending(); if(ws&&ready&&pending.length) photosToLive($('#type').value.trim()||''); };
 
 /* a fresh session: the old one's trace ships and ends; everything on screen and in the Live session goes */
-function fresh(){ log('t','cleared'); ship(false); gen++; busy=0; stop(); handle=null;
-  SID=newSid(); T0=Date.now(); trace=[]; seq=0;
+function fresh(){ log('t','cleared'); ship(false); gen++; busy=0; stop(); handle=null; apps.close();
+  SID=newSid(); T0=Date.now(); trace=[]; seq=0; markStart();
   for(const s of ['#list','#links','#chips','#you','#say','#logStats']) $(s).textContent='';
   $('#log').classList.remove('on'); status('tap to talk'); toast('Fresh start.'); }
 $('#new').onclick=fresh;
@@ -438,6 +484,20 @@ $('#type').onkeydown=async e=>{ if(e.key!=='Enter'||(!e.target.value.trim()&&!pe
   if(!ws){ await start({mic:false}); await new Promise(r=>{ const i=setInterval(()=>{ if(ready||!ws){ clearInterval(i); r(); } },100); }); }
   if(!ws) return; flush(); if(pending.length) return photosToLive(t); log('u',t); $('#you').textContent='“'+t+'”'; sayText=''; $('#say').textContent='';
   ws.send(JSON.stringify({clientContent:{turns:[{role:'user',parts:[{text:t}]}],turnComplete:true}})); };
+
+/* apps: views over the chat. The page underneath keeps running; the pill below is the orb, shrunk. */
+const inert=on=>document.querySelectorAll('.app>header,.app>main,.app>footer').forEach(e=>{ e.inert=on; });
+const apps=createApps({doc:document,win:window,hist:history,host:$('#apps'),defs:CFG.apps,
+  onChange(name){ document.body.classList.toggle('app-open',!!name); $('#pill').hidden=!name; inert(!!name);
+    if(name){ $('#apps').setAttribute('aria-label',CFG.apps[name].title); log('t','▣ '+CFG.apps[name].title+' opened',{app:name}); } else $('#apps').removeAttribute('aria-label');
+    emit('app',{name}); },
+  onError(name,e){ log('t','✗ app '+name+': '+e); toast('That app didn’t open.'); ear.error(); }});
+const openApp=n=>{ if(!apps.open(n)){ toast('No app called '+n+'.'); return false; } return true; };
+const closeApp=()=>apps.close();
+window.dotApps={open:openApp,close:closeApp,current:apps.current};
+$('#pill').onclick=closeApp;
+$('#links').addEventListener('click',e=>{ const a=e.target.closest?.('[data-app]'); if(a){ e.preventDefault(); openApp(a.dataset.app); } });
+if(CFG.version) $('#ver').onclick=()=>navigator.clipboard?.writeText(CFG.version.commit).then(()=>toast('Copied '+CFG.version.short)).catch(()=>toast('Copy blocked'));
 
 /* installable: the worker comes from installRoutes() */
 let installEv=null;

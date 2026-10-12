@@ -8,3 +8,4 @@ export type * from "./types.ts";
 export { chat, type ChatModel, type ChatOptions, type Call, type Image, type Msg, type TurnHooks } from "./chat.ts";
 export { think, thinkDecl, type SubagentOptions } from "./think.ts";
 export { memo } from "./memo.ts";
+export { appTools } from "./apps.ts";

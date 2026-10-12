@@ -1,0 +1,155 @@
+#!/usr/bin/env node
+// The repo's own acceptance checks, for Mini (see AGENTS.md). Run in a fresh
+// checkout at the candidate, with UAT_COMMIT (40-char sha) and UAT_DIR (a
+// writable evidence dir) set. Prints one JSON line:
+//   {"passed":bool,"version":"<short sha>","checks":[{"name","passed","detail"}]}
+//
+//   scripts/uat preview            install, test, start the fixture dot on a free
+//                                  loopback port (no live writes), check it over HTTP
+//                                  and in headless Chromium, stop it
+//   scripts/uat live <base-url>    read-only: /api/info reports UAT_COMMIT, and a smoke check
+
+import { spawn, spawnSync } from "node:child_process";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const commit = process.env.UAT_COMMIT ?? "";
+const dir = process.env.UAT_DIR ?? join(root, ".uat");
+const checks = [];
+const check = async (name, fn) => {
+  try {
+    const detail = await fn();
+    checks.push({ name, passed: true, detail: String(detail ?? "ok").slice(0, 300) });
+    return true;
+  } catch (e) {
+    checks.push({ name, passed: false, detail: String(e?.message ?? e).slice(0, 600) });
+    return false;
+  }
+};
+const finish = () => {
+  const passed = checks.length > 0 && checks.every((c) => c.passed);
+  console.log(JSON.stringify({ passed, version: commit.slice(0, 7), checks }));
+  process.exit(passed ? 0 : 1);
+};
+const run = (cmd, args) => {
+  const r = spawnSync(cmd, args, { cwd: root, encoding: "utf8" });
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, `${cmd}-${args.join("-")}.log`.replace(/[^\w.-]/g, "_")), (r.stdout ?? "") + (r.stderr ?? ""));
+  if (r.status !== 0) throw new Error(`${cmd} ${args.join(" ")} exited ${r.status}: ${((r.stderr || r.stdout) ?? "").slice(-400)}`);
+  return r.stdout;
+};
+const get = async (url, init) => {
+  const r = await fetch(url, init);
+  if (!r.ok) throw new Error(`${url} answered ${r.status}`);
+  return r;
+};
+const expect = (cond, msg) => {
+  if (!cond) throw new Error(msg);
+};
+
+async function playwright() {
+  const dirs = [root, ...(process.env.NODE_PATH ?? "").split(":").filter(Boolean).map((d) => join(d, "..")), process.cwd()];
+  const g = spawnSync("npm", ["root", "-g"], { encoding: "utf8" });
+  if (g.status === 0) dirs.push(join(g.stdout.trim(), ".."));
+  for (const d of dirs) {
+    try {
+      return createRequire(join(d, "x.js"))("playwright");
+    } catch {}
+  }
+  throw new Error("playwright isn't installed here");
+}
+
+async function preview() {
+  expect(/^[0-9a-f]{40}$/.test(commit), "UAT_COMMIT must be a 40-char sha");
+  if (!(await check("install", () => (run("npm", ["ci"]), "npm ci")))) return;
+  await check("tests", () => (run("npm", ["test"]), "npm test"));
+  await check("typecheck", () => (run("npm", ["run", "check"]), "npm run check"));
+
+  const child = spawn(process.execPath, [join(root, "scripts/uat-server.ts")], { cwd: root, env: { ...process.env, UAT_COMMIT: commit, PORT: "0" }, stdio: ["ignore", "pipe", "inherit"] });
+  try {
+    const base = await new Promise((ok, no) => {
+      child.on("exit", (c) => no(new Error(`fixture server exited ${c}`)));
+      setTimeout(() => no(new Error("fixture server didn't start in 20s")), 20000);
+      child.stdout.on("data", (b) => {
+        const m = /listening (\d+)/.exec(String(b));
+        if (m) ok(`http://127.0.0.1:${m[1]}`);
+      });
+    });
+    await check("server starts", () => base);
+    await check("/api/info reports the candidate", async () => {
+      const i = await (await get(base + "/api/info")).json();
+      expect(i.version?.commit === commit, `reports ${i.version?.commit}`);
+      return i.version.short;
+    });
+    await check("screen serves with the version tag", async () => {
+      const html = await (await get(base + "/")).text();
+      expect(html.includes(`>${commit.slice(0, 7)} · `), "no version tag in the page");
+    });
+    await check("browser: apps open, back closes, session survives", async () => {
+      const { chromium } = await playwright();
+      const b = await chromium.launch();
+      try {
+        const p = await b.newPage({ viewport: { width: 390, height: 800 } });
+        const errors = [];
+        p.on("pageerror", (e) => errors.push(String(e)));
+        await p.goto(base + "/");
+        expect((await p.textContent("#ver")).startsWith(commit.slice(0, 7)), "tag shows the short sha");
+        await p.fill("#type", "hello there");
+        await p.press("#type", "Enter");
+        await p.waitForFunction(() => document.querySelector("#say")?.textContent?.includes("You said: hello there"));
+        const before = await p.evaluate(() => document.querySelector("#list").children.length);
+        await p.fill("#type", "open notes");
+        await p.press("#type", "Enter");
+        await p.waitForSelector("#apps .app-view [id=note]");
+        expect(await p.isVisible("#pill"), "pill is visible with an app open");
+        expect((await p.evaluate(() => history.length)) >= 2, "open pushed a history entry");
+        await p.goBack();
+        await p.waitForFunction(() => !document.querySelector("#apps .app-view"));
+        expect(!(await p.isVisible("#pill")), "pill hides on close");
+        expect((await p.evaluate(() => document.querySelector("#list").children.length)) > before, "transcript survived");
+        expect((await p.textContent("#list")).includes("hello there"), "earlier turn still in the transcript");
+        await p.evaluate(() => window.dotApps.open("notes"));
+        await p.click("#pill");
+        await p.waitForFunction(() => window.dotApps.current() === null);
+        expect(await p.evaluate(() => window.__appClosed >= 2), "app cleanup ran on each close");
+        mkdirSync(dir, { recursive: true });
+        await p.screenshot({ path: join(dir, "screen.png") });
+        expect(!errors.length, "page errors: " + errors.join("; "));
+      } finally {
+        await b.close();
+      }
+      return "ok";
+    });
+  } finally {
+    child.removeAllListeners("exit");
+    child.kill();
+  }
+}
+
+async function live(base) {
+  expect(/^[0-9a-f]{40}$/.test(commit), "UAT_COMMIT must be a 40-char sha");
+  expect(base, "usage: scripts/uat live <base-url>");
+  base = base.replace(/\/$/, "");
+  await check("version endpoint reports the candidate", async () => {
+    const i = await (await get(base + "/api/info")).json();
+    expect(i.version?.commit === commit, `live reports ${i.version?.commit ?? "no version"}, wanted ${commit}`);
+    return i.version.short;
+  });
+  await check("smoke: the screen serves", async () => {
+    const html = await (await get(base + "/")).text();
+    expect(html.includes("<title>") && html.includes('id="dot"'), "not the dot screen");
+    expect(html.includes(`>${commit.slice(0, 7)} · `), "screen's version tag doesn't match");
+  });
+}
+
+const [mode, arg] = process.argv.slice(2);
+if (mode === "preview") await preview();
+else if (mode === "live") await live(arg);
+else {
+  console.error("usage: scripts/uat preview | scripts/uat live <base-url>");
+  process.exit(2);
+}
+finish();

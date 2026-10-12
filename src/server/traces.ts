@@ -1,6 +1,9 @@
 import type { TraceLine } from "./types.ts";
 
-/** What the client ships: `u` (user), `d` (dot) and `tool` events. */
+/** The text of the line the client opens every session with (kind `start`); the server stamps the build on it. */
+export const SESSION_START = "session start";
+
+/** What the client ships: `u` (user), `d` (dot), `tool` and `start` events. */
 export type ClientEvent = {
   kind: "u" | "d" | "tool" | string;
   id?: string | number;
@@ -28,6 +31,7 @@ export function toLines(session: string, events: ClientEvent[]): TraceLine[] {
       text: String(e.text ?? "").slice(0, 8000),
       model: e.model ?? null,
     };
+    if (e.kind === "start") line.text = SESSION_START;
     if (e.kind === "tool") {
       line.text = "";
       line.tool_calls = [

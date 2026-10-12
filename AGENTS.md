@@ -14,3 +14,5 @@ FAC-59), the Layer adapter DOT-6 (was FAC-60).
 - Layer is the default source, not a requirement: a dot with no Layer
   namespaces must still work.
 - `npm test` and `npm run check` before every commit.
+- `scripts/uat` is what Mini runs on a candidate (`preview`, then `live <url>`);
+  keep it passing and in step with the screen.

@@ -149,6 +149,74 @@ starts a factory session that rebuilds `theme/` and `web/` and opens a PR, and
 the theme code passes `themeProblems()`. hev/dasha is the reference repo shape.
 `memo` (from `/server`) caches slow outside calls and shares calls in flight.
 
+## Apps
+
+An app is a named view the dot owns, mounted over the chat in the same page. The
+chat keeps running underneath: the Live session, transcript, chips, links and
+pending jobs are untouched, and the voice keeps listening. While an app is open
+the orb shrinks to a pill at the top right that shows the dot's state; tapping
+it returns to the chat. Each open pushes a history entry, so Android back,
+swipe-back and back in an installed PWA close the app instead of leaving the page.
+
+```ts
+import { appTools, defineDot } from "@hevmind/dots/server";
+import { screenRoutes } from "@hevmind/dots/client";
+
+const dot = await defineDot({
+  /* ... */
+  tools: [/* ..., */ appTools({ budget: "the month's spending, when asked to see it" })],
+});
+const page = screenRoutes({
+  name: "mine",
+  apps: {
+    budget: {
+      title: "Budget",
+      html: `<h2>Budget</h2><div id="rows"></div>`,
+      css: `[data-app="budget"] h2 { margin: 0 }`,
+      // a function body of (el, api); return a cleanup function if it needs one
+      script: `
+        api.on("card", (e) => { el.querySelector("#rows").textContent = e.detail.card.title; });
+        api.on("tool", (e) => console.log("running", e.detail.name));
+        return () => console.log("closed");`,
+      // or: module: "/budget.js"  (an ES module exporting mount(el, api), likewise returning a cleanup)
+    },
+  },
+});
+```
+
+- **The app is the dot's.** `html`, `css`, `script` and `module` are trusted
+  strings from the dot's author; the screen owns the container (`el`) and gives
+  the app `api`: `{ name, el, on(event, fn), open(name), close() }`. `api.on`
+  listens for the screen's `dot:*` events (`ready`, `greet`, `tool`, `done`,
+  `card`, `error`, `bye`, plus `app` with `{ name }` or `null`) and unhooks them
+  when the app closes. The app is torn down on close and mounted fresh on open.
+- **Opening.** `appTools(...)` adds the `open_app` and `close_app` display tools,
+  so the voice opens an app ("show me the budget") and closes it ("close that",
+  "go back"). A card can carry `app: { name, label }`, drawn as a button that
+  opens it. `window.dotApps.open(name)` and `.close()` do the same from the
+  dot's own script. Opening another app while one is open swaps it in place, so
+  one back still returns to the chat. These are display tools, so they follow
+  the display policy: allowed logins only.
+- **Closing.** The pill, back, `close_app`, and **new** (a fresh session) all close it.
+
+## Version tag
+
+`defineDot({ version })` and `screenRoutes({ version })` take `{ commit, short, built }`
+(`built` is ISO 8601). The screen shows a small always-visible tag, short sha and
+date, in the bottom-left corner; tapping it copies the full commit. `GET /api/info`
+returns it as `version`, and the trace for each session opens with a `session
+start` line carrying it. `gitVersion()` from `/version` reads it from the checkout
+at startup (Node only, so it sits outside `/server`; on Workers pass the commit in
+at build time).
+
+```ts
+import { gitVersion } from "@hevmind/dots/version";
+
+const version = gitVersion(); // { commit, short, built } or undefined outside git
+const dot = await defineDot({ /* ... */ version });
+const page = screenRoutes({ name: "mine", version });
+```
+
 ## Routes
 
 `GET /api/token`, `POST /api/tool`, `POST /api/chat`, `POST /api/trace`, `GET /api/job/<id>`, `GET /api/info`.
@@ -191,3 +259,15 @@ Node 22.18+ runs the TypeScript directly.
 npm test
 npm run check
 ```
+
+`scripts/uat` is the repo's acceptance check for Mini, run in a fresh checkout
+with `UAT_COMMIT` (the 40-char sha) and `UAT_DIR` (evidence dir) set. It prints
+one JSON line, `{"passed", "version", "checks"}`.
+
+- `scripts/uat preview` installs, runs the tests and type check, starts a
+  fixture dot (`scripts/uat-server.ts`: fake voice and text model, no live
+  writes) on a free loopback port, checks it over HTTP and in headless
+  Chromium (apps open, back closes, the session survives), and stops it.
+  Playwright must be resolvable (`NODE_PATH` or a global install).
+- `scripts/uat live <base-url>` is read-only: `/api/info` must report
+  `UAT_COMMIT`, and the screen must serve with that commit's tag.

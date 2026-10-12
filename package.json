@@ -18,7 +18,8 @@
     "./cues": "./src/cues/index.ts",
     "./theme": "./src/theme/index.ts",
     "./haiku": "./src/haiku/index.ts",
-    "./restyle": "./src/restyle/index.ts"
+    "./restyle": "./src/restyle/index.ts",
+    "./version": "./src/version/index.ts"
   },
   "scripts": {
     "test": "node --test test/*.test.ts",

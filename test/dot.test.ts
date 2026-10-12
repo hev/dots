@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { defineDot, defineTool, local, memorySink, redactor, type VoiceProvider } from "../src/server/index.ts";
+import { appTools, defineDot, defineTool, local, memorySink, redactor, type VoiceProvider } from "../src/server/index.ts";
 import { declarations } from "../src/gemini-live/index.ts";
 
 const SESSION = "0123abcd-0000";
@@ -153,4 +153,32 @@ test("gemini declarations use upper-case types", () => {
     { name: "pipeline", description: "d", parameters: { type: "object", properties: { days: { type: "integer" } } } },
   ]);
   assert.deepEqual(d.parameters, { type: "OBJECT", properties: { days: { type: "INTEGER" } } });
+});
+
+test("the build is reported by /api/info and stamped on a session's start in traces", async () => {
+  const version = { commit: "0123456789abcdef0123456789abcdef01234567", short: "0123456", built: "2026-10-12T00:00:00.000Z" };
+  const traces = memorySink();
+  const d = await defineDot({ name: "v", persona: () => "p", voice, tools: [tools], traces, version });
+  const info = (await (await d.fetch(new Request("http://dot/api/info"))).json()) as any;
+  assert.deepEqual(info.version, version);
+  await d.fetch(new Request("http://dot/api/trace", { method: "POST", body: JSON.stringify({ session: SESSION, events: [{ kind: "start", id: "a-1" }, { kind: "u", id: "a-2", text: "hi" }] }) }));
+  const lines = traces.lines.get(SESSION) as any[];
+  assert.equal(lines[0].text, "session start");
+  assert.deepEqual(lines[0].version, version, "the commit survives redaction");
+  assert.equal(lines[1].version, undefined);
+  const none = await defineDot({ name: "v", persona: () => "p", voice, tools: [tools] });
+  assert.equal(((await (await none.fetch(new Request("http://dot/api/info"))).json()) as any).version, null);
+});
+
+test("appTools open and close apps through the display policy", async () => {
+  const d = await defineDot({ name: "a", persona: () => "p", voice, tools: [appTools({ budget: "when asked about money" })], identity: async (req) => req.headers.get("x-login"), logins: [ADAM] });
+  const call = (name: string, args: Record<string, unknown>, who?: string) =>
+    d.invoke(name, args, { session: SESSION, who: who ?? null, demo: true });
+  assert.equal((await call("open_app", { app: "budget" })).status, 403, "anonymous can't");
+  const open = await call("open_app", { app: "budget" }, ADAM);
+  assert.equal((open.body as any).app, "budget");
+  assert.match(String((await call("open_app", { app: "nope" }, ADAM)).body && ((await call("open_app", { app: "nope" }, ADAM)).body as any).error), /no app/);
+  assert.deepEqual((await call("close_app", {}, ADAM)).body, { close_app: true });
+  const decl = d.registry.decls.find((x) => x.name === "open_app")!;
+  assert.deepEqual(decl.parameters!.properties!.app.enum, ["budget"]);
 });
