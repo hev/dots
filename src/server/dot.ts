@@ -4,8 +4,8 @@ import { redactor, type RedactOptions } from "./redact.ts";
 import { memoryStore } from "./stores.ts";
 import { think, thinkDecl, type SubagentOptions } from "./think.ts";
 import { defineTool, local, registry, type Registry } from "./tools.ts";
-import { SESSION, toLines, type ClientEvent } from "./traces.ts";
-import type { Ctx, Identity, Pack, Store, ToolServer, TraceSink, VoiceProvider } from "./types.ts";
+import { SESSION, SESSION_START, toLines, type ClientEvent } from "./traces.ts";
+import type { Ctx, Identity, Pack, Store, ToolServer, TraceSink, Version, VoiceProvider } from "./types.ts";
 
 export type PersonaInput = {
   demo: boolean;
@@ -44,6 +44,8 @@ export type DotOptions = {
   live?: boolean;
   /** Mount point for the routes. Default "/api". */
   base?: string;
+  /** The running build (see gitVersion in /version). Reported by GET /api/info and stamped on each session's start in traces. */
+  version?: Version;
   log?: (line: string) => void;
 };
 
@@ -175,6 +177,7 @@ export async function defineDot(opts: DotOptions): Promise<Dot> {
       name: opts.name,
       inbox: opts.inbox ?? null,
       text: !!opts.chat,
+      version: opts.version ?? null,
       tools: tools.decls.map((d) => ({ name: d.name, kind: d.kind ?? "read", description: d.description.split(/\. (?=[A-Z])/)[0].replace(/\.$/, "") })),
     });
   }
@@ -197,7 +200,9 @@ export async function defineDot(opts: DotOptions): Promise<Dot> {
 
   async function writeTrace(session: string, events: ClientEvent[]) {
     // Secrets and emails are stripped; amounts are kept, as in hev dot.
-    if (opts.traces) await opts.traces(session, r.safe(toLines(session, events)));
+    // The build is added after redaction, which would take a full commit for a key.
+    const v = opts.version;
+    if (opts.traces) await opts.traces(session, r.safe(toLines(session, events)).map((l) => (v && l.role === "event" && l.text === SESSION_START ? { ...l, version: v } : l)));
   }
 
   const dot: Dot = {

@@ -43,9 +43,14 @@ export type Card = {
   body?: string;
   /** A class name for the dot's own CSS, e.g. "haiku". */
   style?: string;
+  /** A button that opens one of the screen's apps (see ScreenOptions.apps) over the chat. */
+  app?: { name: string; label: string };
   /** For the model only: what to say about the card now that it's up. */
   note?: string;
 };
+
+/** Which build is running: the full commit, a short form for display, and when it was built (ISO 8601). */
+export type Version = { commit: string; short: string; built: string };
 
 export type Ctx = {
   session: string;
@@ -96,6 +101,8 @@ export type TraceLine = {
   role: "user" | "assistant" | "event";
   text: string;
   model?: string | null;
+  /** On the session-start line: the build that served the session. */
+  version?: Version;
   tool_calls?: {
     id: string;
     name: string;
