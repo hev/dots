@@ -136,10 +136,13 @@ test("an app's css lands in the page, after the screen's own", () => {
   assert.ok(html.indexOf('[data-app="a"]{color:red}') > html.indexOf("#pill{"));
 });
 
-test("the version tag shows short sha and date, and copies the full commit", async () => {
+test("the version sits in info's Build section, shows short sha and date, and copies the full commit", async () => {
   const version = { commit: "a".repeat(40), short: "aaaaaaa", built: "2026-10-12T09:30:00.000Z" };
   const html = screen({ name: "me", version });
   assert.match(html, /<button id="ver"[^>]*>aaaaaaa · 2026-10-12<\/button>/);
+  const info = html.slice(html.indexOf('<section id="info"'), html.indexOf("</section>", html.indexOf('<section id="info"')));
+  assert.match(info, /<h3>Build<\/h3><button id="ver"/, "in info, under Build");
+  assert.equal(html.match(/id="ver"/g)!.length, 1, "and nowhere else on the screen");
   assert.doesNotMatch(screen({ name: "me" }), /id="ver"/);
   const b = boot({ name: "me", version });
   await b.$("#ver").onclick();
@@ -183,11 +186,13 @@ class FakeSocket { url: string; sent: string[] = []; onclose: any; onopen: any; 
   constructor(url: string) { this.url = url; sockets.push(this); }
   send(s: string) { this.sent.push(s); } close(code: number) { this.readyState = 3; queueMicrotask(() => this.onclose?.({ code })); } }
 
+const mode = (b: ReturnType<typeof boot>) => b.$("#mode").dataset.mode;
+
 test("the starting mode is the dot's defaultMode until the person picks one", () => {
-  assert.equal(boot({ name: "me" }).$("#mode").textContent, "demo", "demo by default, so other dots don't change");
-  assert.equal(boot({ name: "me", defaultMode: "private" }).$("#mode").textContent, "private");
-  assert.equal(boot({ name: "me", defaultMode: "private" }, { localStorage: { demo: "1" } }).$("#mode").textContent, "demo", "a saved pick wins");
-  assert.equal(boot({ name: "me" }, { localStorage: { demo: "0" } }).$("#mode").textContent, "private");
+  assert.equal(mode(boot({ name: "me" })), "demo", "demo by default, so other dots don't change");
+  assert.equal(mode(boot({ name: "me", defaultMode: "private" })), "private");
+  assert.equal(mode(boot({ name: "me", defaultMode: "private" }, { localStorage: { demo: "1" } })), "demo", "a saved pick wins");
+  assert.equal(mode(boot({ name: "me" }, { localStorage: { demo: "0" } })), "private");
   assert.match(screen({ name: "me", defaultMode: "private" }), /"defaultMode":"private"/);
   assert.match(screen({ name: "me", defaultMode: "nonsense" as any }), /"defaultMode":"demo"/);
 });
@@ -222,7 +227,7 @@ test("private mode refused by the server drops back to demo", async () => {
   const b = boot({ name: "me", defaultMode: "private" }, { fetch: n.fetch, WebSocket: FakeSocket, AudioContext: FakeAudio });
   await b.$("#dot").onclick();
   await b.tick();
-  assert.equal(b.$("#mode").textContent, "demo");
+  assert.equal(mode(b), "demo");
   assert.equal(sockets.length, 1, "it still starts, in demo");
 });
 
@@ -235,7 +240,7 @@ test("a wordmark can put the cursor inside the name", () => {
 test("a semver goes on the tag; the short sha stays in the tag's title, the info pane and the log", async () => {
   const version = { commit: "b".repeat(40), short: "bbbbbbb", built: "2026-10-13T09:30:00.000Z", semver: "1.4.0" };
   const html = screen({ name: "me", version });
-  assert.match(html, /<button id="ver" title="bbbbbbb · copy the build" data-sha="bbbbbbb">1\.4\.0 · 2026-10-13<\/button>/);
+  assert.match(html, /<button id="ver" class="row" title="bbbbbbb · copy the build" data-sha="bbbbbbb">1\.4\.0 · 2026-10-13<\/button>/);
   assert.match(screen({ name: "me", version: { ...version, semver: "not<semver>" } }), />bbbbbbb · 2026-10-13</, "a bad semver falls back to the sha");
   const b = boot({ name: "me", version });
   assert.equal(b.$("#logStats").textContent, "1.4.0 · bbbbbbb");
@@ -303,4 +308,63 @@ test("Escape closes the threads drawer", async () => {
   assert.equal(b.$("#threadList").textContent, "No past threads yet.");
   b.win.dispatchEvent({ type: "keydown", key: "Escape" });
   assert.ok(!b.$("#threads").classList.contains("on"));
+});
+
+test("the header reads ☰, the wordmark, the mode, then a compact i; the log is not in it", () => {
+  const html = screen({ name: "hev dot", wordmark: ["hev", "dot"] });
+  const header = html.slice(html.indexOf("<header>"), html.indexOf("</header>"));
+  const at = (re: RegExp) => header.search(re);
+  assert.ok(at(/id="threadsBtn"/) >= 0 && at(/id="threadsBtn"/) < at(/class="wm"/), "☰ left of the wordmark");
+  assert.ok(at(/class="wm"/) < at(/id="mode"/) && at(/id="mode"/) < at(/id="infoBtn"/), "then the mode, then info");
+  assert.match(header, /<button id="infoBtn" class="ic" aria-label="info"[^>]*>i<\/button>/);
+  assert.doesNotMatch(header, /logBtn|id="ver"/, "log and the build moved into info");
+  assert.match(html, /<section id="info">.*<button id="logBtn"/, "the log opens from info");
+  assert.match(html, /header \.ic\{width:40px;height:40px/, "tap targets of 40px");
+});
+
+test("private mode is a shut lock, demo an open one; the words stay for screen readers", () => {
+  const b = boot({ name: "me", defaultMode: "private" });
+  const m = b.$("#mode");
+  assert.equal(m.attrs["aria-label"], "private mode");
+  assert.match(m.innerHTML, /^<svg [^>]*stroke="currentColor"[^>]*aria-hidden="true">/, "an inline svg that themes");
+  assert.match(m.innerHTML, /a4 4 0 0 1 8 0v4/, "shut");
+  assert.ok(m.classList.contains("priv"));
+  m.onclick();
+  assert.equal(m.attrs["aria-label"], "demo mode");
+  assert.doesNotMatch(m.innerHTML, /a4 4 0 0 1 8 0v4/, "open");
+  assert.ok(!m.classList.contains("priv"));
+  assert.doesNotMatch(m.innerHTML, /🔒|🔓/, "not an emoji");
+  assert.equal(boot({ name: "me", modes: false }).$("#mode").hidden, true, "modes:false shows no switch");
+});
+
+test("the log opens from info; back and Escape close it and land in info", async () => {
+  const b = boot({ name: "me" }, { fetch: net({ "/api/info": () => ({ json: { tools: [] } }) }).fetch });
+  await b.$("#infoBtn").onclick();
+  assert.ok(b.$("#info").classList.contains("on"));
+  assert.equal(b.stack.length, 2);
+  b.$("#logBtn").onclick();
+  assert.ok(b.$("#log").classList.contains("on"));
+  assert.equal(b.stack.length, 3);
+  b.ctx.window.history.back();
+  await b.tick();
+  assert.ok(!b.$("#log").classList.contains("on"), "back closes the log");
+  assert.ok(b.$("#info").classList.contains("on"), "and lands in info");
+  b.$("#logBtn").onclick();
+  b.win.dispatchEvent({ type: "keydown", key: "Escape" });
+  await b.tick();
+  assert.ok(!b.$("#log").classList.contains("on"), "Escape closes the log");
+  assert.ok(b.$("#info").classList.contains("on"), "and lands in info");
+  assert.equal(b.at(), 1);
+  b.$("#logBtn").onclick();
+  b.$("#logClose").onclick();
+  await b.tick();
+  assert.ok(b.$("#info").classList.contains("on"), "close lands in info too");
+  b.win.dispatchEvent({ type: "keydown", key: "Escape" });
+  await b.tick();
+  assert.ok(!b.$("#info").classList.contains("on"), "a second Escape closes info");
+  assert.equal(b.at(), 0, "no history left behind");
+  await b.$("#infoBtn").onclick();
+  b.ctx.window.history.back();
+  await b.tick();
+  assert.ok(!b.$("#info").classList.contains("on"), "back closes info");
 });
