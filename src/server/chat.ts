@@ -66,6 +66,8 @@ export function chat(o: ChatOptions) {
   return {
     /** One user message in, the dot's reply out. */
     async turn(ctx: Ctx, text: string, hooks: TurnHooks = {}, images: Image[] = []): Promise<string> {
+      // Act receipts need the yes in a later turn than the read-back.
+      ctx = { ...ctx, turn: crypto.randomUUID() };
       const key = keyOf(ctx);
       const history = (((await o.store.get(key)) as Msg[] | undefined) ?? []).slice(-keep);
       const trace: ClientEvent[] = [{ kind: "u", id: `${Date.now()}u`, ts: Date.now(), text: images.length ? `[${images.length} photo${images.length > 1 ? "s" : ""}] ${text}` : text }];

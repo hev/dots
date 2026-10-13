@@ -45,6 +45,30 @@ export function http(opts: {
   };
 }
 
+/**
+ * How every act works, for the persona: the framework's half of the act prompt.
+ * The server's read-back is the script; the model's own paraphrase never is.
+ */
+export const ACT_RULES =
+  "Actions (needs a yes): ALWAYS call the action first WITHOUT confirmed. The server answers with a read-back: " +
+  "say its `text` to the user exactly as given, word for word, never your own paraphrase, and wait for a clear yes. " +
+  "Only after that yes, in the user's next turn, call again with the very same arguments plus confirmed=true. " +
+  "If the server says \"Not sent yet\", read its text back and ask again; if it says STOP, stop: tell the user plainly " +
+  "it didn't go through and why, and don't call it again.";
+
+const CONFIRMED = {
+  type: "boolean" as const,
+  description: "Leave out on the first call. Set true only after reading back the server's read-back text word for word and hearing a clear yes.",
+};
+
+/** An act's declaration, with `confirmed` added if the dot left it out, so the model knows the field. */
+function actDecl(d: ToolDecl): ToolDecl {
+  if (d.kind !== "act") return d;
+  const p = d.parameters ?? { type: "object" };
+  if (p.properties?.confirmed) return d;
+  return { ...d, parameters: { ...p, type: "object", properties: { ...p.properties, confirmed: CONFIRMED } } };
+}
+
 export type Registry = {
   decls: ToolDecl[];
   kind(name: string): ToolDecl["kind"];
@@ -60,7 +84,7 @@ export async function registry(servers: ToolServer[]): Promise<Registry> {
     for (const d of await s.list()) {
       if (owner.has(d.name)) throw new Error(`two tool servers declare ${d.name}`);
       owner.set(d.name, s);
-      decls.push(d);
+      decls.push(actDecl(d));
     }
   }
   const byName = new Map(decls.map((d) => [d.name, d]));
@@ -77,7 +101,7 @@ export async function registry(servers: ToolServer[]): Promise<Registry> {
       }
     },
     capabilities() {
-      return decls
+      const lines = decls
         .map((d) => {
           const first = d.description.split(/\. (?=[A-Z])/)[0].replace(/\.$/, "");
           const tag =
@@ -85,6 +109,7 @@ export async function registry(servers: ToolServer[]): Promise<Registry> {
           return `- ${d.name}${tag}: ${first}`;
         })
         .join("\n");
+      return decls.some((d) => d.kind === "act") ? `${lines}\n${ACT_RULES}` : lines;
     },
   };
 }

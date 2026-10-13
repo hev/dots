@@ -1,5 +1,5 @@
 import { chat, type ChatModel, type Image } from "./chat.ts";
-import { gate } from "./receipts.ts";
+import { gate, type GateOptions } from "./receipts.ts";
 import { redactor, type RedactOptions } from "./redact.ts";
 import { memoryStore } from "./stores.ts";
 import { think, thinkDecl, type SubagentOptions } from "./think.ts";
@@ -40,6 +40,8 @@ export type DotOptions = {
   traces?: TraceSink;
   /** Act receipts and slow-job results. Defaults to memory (one process). */
   store?: Store;
+  /** Act receipts: the gap a yes needs without a turn (`gapMs`, default 4000) and refused confirmed calls before a tool stops (`refusals`, default 2). See receipts.ts. */
+  receipts?: Pick<GateOptions, "gapMs" | "refusals">;
   /** When false, confirmed acts answer with what they would have done. Default false. */
   live?: boolean;
   /** Mount point for the routes. Default "/api". */
@@ -115,7 +117,8 @@ export async function defineDot(opts: DotOptions): Promise<Dot> {
     }
     if (kind === "act") {
       if (!SESSION.test(ctx.session)) return json({ error: "acts need a session" }, 400);
-      const g = await gate(store, ctx.session, name, args);
+      const g = await gate(store, ctx.session, name, args, { ...opts.receipts, turn: ctx.turn });
+      log(`ACT ${ctx.who ?? "-"} ${name} ${g.run ? "run" : "error" in g ? (g.stop ? "stopped" : "refused") : "readback"}`);
       if (!g.run) return json(r.safe("error" in g ? { error: g.error } : { readback: g.readback }));
       if (!opts.live) return json({ dry_run: true, would_run: name, args });
     }
