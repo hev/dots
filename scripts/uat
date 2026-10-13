@@ -86,7 +86,7 @@ async function preview() {
     });
     await check("screen serves with the version tag", async () => {
       const html = await (await get(base + "/")).text();
-      expect(html.includes(`>${commit.slice(0, 7)} · `), "no version tag in the page");
+      expect(html.includes(`data-sha="${commit.slice(0, 7)}"`), "no version tag in the page");
     });
     await check("browser: apps open, back closes, session survives", async () => {
       const { chromium } = await playwright();
@@ -123,6 +123,40 @@ async function preview() {
       }
       return "ok";
     });
+    await check("browser: threads drawer lists, resumes, starts fresh; back and Escape close it", async () => {
+      const { chromium } = await playwright();
+      const b = await chromium.launch();
+      try {
+        const p = await b.newPage({ viewport: { width: 360, height: 740 } });
+        const errors = [];
+        p.on("pageerror", (e) => errors.push(String(e)));
+        await p.goto(base + "/");
+        await p.fill("#type", "first thread line");
+        await p.press("#type", "Enter");
+        await p.waitForFunction(() => document.querySelector("#say")?.textContent?.includes("You said: first thread line"));
+        await p.click("#threadsBtn");
+        await p.waitForSelector("#threads.on #threadList .th");
+        await p.goBack();
+        await p.waitForFunction(() => !document.querySelector("#threads").classList.contains("on"));
+        await p.click("#threadsBtn");
+        await p.waitForSelector("#threads.on");
+        await p.keyboard.press("Escape");
+        await p.waitForFunction(() => !document.querySelector("#threads").classList.contains("on"));
+        await p.click("#threadsBtn");
+        await p.click("#newThread");
+        await p.waitForFunction(() => !document.querySelector("#list").textContent.includes("first thread line"));
+        await p.click("#threadsBtn");
+        await p.click("#threadList .th >> text=first thread line");
+        await p.waitForFunction(() => document.querySelector("#list").textContent.includes("first thread line"));
+        expect(!(await p.isVisible("#threads")), "drawer closes on resume");
+        mkdirSync(dir, { recursive: true });
+        await p.screenshot({ path: join(dir, "threads.png") });
+        expect(!errors.length, "page errors: " + errors.join("; "));
+      } finally {
+        await b.close();
+      }
+      return "ok";
+    });
   } finally {
     child.removeAllListeners("exit");
     child.kill();
@@ -141,7 +175,8 @@ async function live(base) {
   await check("smoke: the screen serves", async () => {
     const html = await (await get(base + "/")).text();
     expect(html.includes("<title>") && html.includes('id="dot"'), "not the dot screen");
-    expect(html.includes(`>${commit.slice(0, 7)} · `), "screen's version tag doesn't match");
+    // The tag shows the sha, or a dot's semver with the sha in data-sha.
+    expect(html.includes(`>${commit.slice(0, 7)} · `) || html.includes(`data-sha="${commit.slice(0, 7)}"`), "screen's version tag doesn't match");
   });
 }
 

@@ -28,9 +28,10 @@ export default { fetch: dot.fetch }; // Workers; on Node, wrap in any fetch serv
 
 - **Tool kinds.** `read` (the default), `act`, `private`, `display` and `slow`.
 - **Acts need a read-back.** An act called without `confirmed` stores a receipt
-  for those exact arguments and returns a read-back. `confirmed: true` runs only
-  against a matching receipt, once. A changed draft needs a new yes. Unless
-  `live: true`, confirmed acts dry-run.
+  for those exact arguments and returns a read-back (`text` to say word for word,
+  and a `say` instruction). `confirmed: true` runs only against a matching
+  receipt, once. A changed draft needs a new yes. Unless `live: true`, confirmed
+  acts dry-run. See [Act receipts](#act-receipts) for how it keeps models from looping.
 - **Demo mode by default.** Every tool result is scrubbed before the model sees it:
   secrets, emails, IPs and codenamed clients, plus amounts in demo mode.
   Private mode, acts and display results need an allowed login.
@@ -72,9 +73,52 @@ const page = screenRoutes({ name: "mine", packs: [places] });
 Static Maps on one key). Map images are served by the dot from ids `show_map`
 made, so the key stays on the server.
 
-**new** on the screen (or `/clear` typed) starts a fresh session: links, cards
-and the log empty, the Live session and its resumption handle go, and the next
-turn gets a new session id. The old session's trace ends with a `cleared` event.
+## Act receipts
+
+Models (Gemini Live especially) skip the unconfirmed call, read back in their own
+words, and retry with slightly reworded arguments. The server doesn't let that loop:
+
+- **A confirmed call with no receipt doesn't run.** It stores a receipt for those
+  exact arguments and answers with the read-back, `say` starting "Not sent yet.
+  Read this exact text back and get a new yes". The next yes then matches.
+- **The yes must come after the read-back.** On a surface that knows its turns
+  (the chat loop sets `ctx.turn` per user message: the screen's typed chat,
+  Slack), a receipt is only accepted from an earlier turn. The voice screen
+  can't tell the server where a user turn starts (Live's transcriptions can land
+  after the tool call), so there a receipt is only accepted `gapMs` after it was
+  issued: default 4 s, shorter than a spoken read-back plus a spoken yes, longer
+  than a model calling straight back.
+- **Refusals are capped.** After `refusals` (default 2) refused confirmed calls
+  of one tool in one session, the next one answers with a final `STOP.` error:
+  stop, tell the user plainly it didn't go through and why, don't retry. The
+  tool stays off for that session (30 minutes); a new thread starts clean.
+- **The act prompt comes with the tools.** `capabilities` ends with the rules
+  (`ACT_RULES`) whenever a dot has an act: always call first without
+  `confirmed`, read the server's `text` word for word, never a paraphrase. Act
+  declarations get a described `confirmed` parameter if they leave it out.
+
+```ts
+const dot = await defineDot({ /* ... */ receipts: { gapMs: 4000, refusals: 2 } });
+```
+
+## Threads
+
+The screen's ☰ opens a drawer of this user's past threads, newest first, with
+each one's first line and when it was last used. Tapping one resumes it: its
+transcript (with photo thumbnails) comes back, the session id carries on, so
+typed turns keep their history, and a Live session started in it gets the last
+lines as context. **new thread** in the drawer (or `/clear` typed) starts fresh:
+links, cards and the log empty, the Live session and its resumption handle go,
+and the next turn gets a new session id. The old session's trace ends with a
+`cleared` event. The drawer works at phone width, from the keyboard (Escape
+closes it) and with back or swipe-back, which close it.
+
+Threads are kept in the dot's `Store` per verified login (`GET /api/threads`,
+`GET /api/threads/<id>`), for 30 days: only the turns (what was said, photo
+thumbnails, cards and links), secrets stripped as in traces. A thread belongs to
+whoever wrote it first; nobody else can read it or add to it. They read back
+in the screen's mode, so in demo mode a private thread's amounts are masked.
+Without an identity there are no threads. Slack threads stay in Slack.
 
 ## Text, sub-agents and info
 
@@ -128,6 +172,16 @@ line breaks kept) and a `style` class for the dot's CSS.
 `modes: false` hides the demo/private switch and always runs private, for a dot
 with nothing worth hiding. The server still checks the login.
 
+`defaultMode: "private"` starts the screen in private mode (default `"demo"`).
+The person's own pick, kept on the device, still wins, and the server still
+refuses private mode to anyone not allowed; the screen then drops back to demo.
+Switching mode applies to the next typed turn, and restarts an open Live session
+in the new mode (without its resumption handle, so private answers don't carry
+into demo).
+
+`wordmark: ["hev", "dot"]` puts the blinking cursor inside the name (hev▌dot).
+By default it's the name, then the cursor.
+
 ## Photos
 
 The screen's 📷 opens the phone's chooser, camera or photo library. Photos are
@@ -136,6 +190,9 @@ they go in at once, inline in a turn (a Live `realtimeInput` video frame isn't
 seen by a typed turn); otherwise they go with the next typed question, as
 `images` on `POST /api/chat` (up to four, JPEG, PNG or WebP, under 5 MB each).
 The chat history keeps the photos of the last two messages that had them.
+Once sent, they show as thumbnails in the user's turn, under the orb and in the
+log, and a small thumbnail of each (`thumb`, a data: URL) is kept in the thread;
+the trace notes only how many there were.
 
 ## Themes, haiku and restyling
 
@@ -197,7 +254,7 @@ const page = screenRoutes({
   dot's own script. Opening another app while one is open swaps it in place, so
   one back still returns to the chat. These are display tools, so they follow
   the display policy: allowed logins only.
-- **Closing.** The pill, back, `close_app`, and **new** (a fresh session) all close it.
+- **Closing.** The pill, back, `close_app`, and switching thread (**new thread**, or resuming one) all close it.
 
 ## Version tag
 
@@ -217,9 +274,15 @@ const dot = await defineDot({ /* ... */ version });
 const page = screenRoutes({ name: "mine", version });
 ```
 
+A dot with releases adds `semver` (e.g. `{ ...gitVersion(), semver: "1.4.0" }`):
+the tag then shows `1.4.0 · date`, with the short sha in its title and
+`data-sha`, and a tap copies `1.4.0 <commit>`. The short sha stays in the info
+pane's Build line, at the top of the log and on the log's `start` event, for
+issue reports. Anything that isn't semver is ignored and the sha shows.
+
 ## Routes
 
-`GET /api/token`, `POST /api/tool`, `POST /api/chat`, `POST /api/trace`, `GET /api/job/<id>`, `GET /api/info`.
+`GET /api/token`, `POST /api/tool`, `POST /api/chat`, `POST /api/trace`, `GET /api/job/<id>`, `GET /api/info`, `GET /api/threads`, `GET /api/threads/<id>`.
 
 ## Slack
 
@@ -267,7 +330,8 @@ one JSON line, `{"passed", "version", "checks"}`.
 - `scripts/uat preview` installs, runs the tests and type check, starts a
   fixture dot (`scripts/uat-server.ts`: fake voice and text model, no live
   writes) on a free loopback port, checks it over HTTP and in headless
-  Chromium (apps open, back closes, the session survives), and stops it.
+  Chromium (apps open, back closes, the session survives; the threads drawer
+  lists, resumes and starts fresh, and back and Escape close it), and stops it.
   Playwright must be resolvable (`NODE_PATH` or a global install).
 - `scripts/uat live <base-url>` is read-only: `/api/info` must report
   `UAT_COMMIT`, and the screen must serve with that commit's tag.

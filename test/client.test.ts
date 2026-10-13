@@ -12,9 +12,11 @@ test("the screen carries the dot's name, labels and install tags", () => {
   assert.match(html, /\/api\/token|API\+'\/token/);
 });
 
-test("the screen can start a fresh session", () => {
+test("the screen can start a fresh session, from the threads drawer or /clear", () => {
   const html = screen({ name: "me" });
-  assert.match(html, /id="new"/);
+  assert.match(html, /<button id="threadsBtn"[^>]*aria-controls="threads"/);
+  assert.match(html, /id="newThread"/);
+  assert.doesNotMatch(html, /id="new"/, "the old chip is gone");
   assert.match(html, /\(clear\|new\)/);
 });
 
@@ -53,7 +55,7 @@ test("a theme sets the colors, light and dark, and only real colors get in", () 
 // The page, run in a small fake browser: the real script, real createApps, a
 // Live session that is up (ws open), a transcript line and a pending job.
 import vm from "node:vm";
-function boot(opts: Parameters<typeof screen>[0]) {
+function boot(opts: Parameters<typeof screen>[0], env: Record<string, unknown> = {}) {
   const html = screen(opts);
   const js = html.slice(html.indexOf("<script>") + 8, html.lastIndexOf("</script>"));
   const els = new Map<string, any>();
@@ -85,7 +87,8 @@ function boot(opts: Parameters<typeof screen>[0]) {
   const ctx = vm.createContext({
     ...win, window: win, document: doc, history: win.history, console, setInterval: () => 0, setTimeout, clearTimeout, requestAnimationFrame: () => 0,
     navigator: { clipboard: { writeText: async (t: string) => void (ctx.copied = t) } }, localStorage: {}, matchMedia: () => ({ matches: false }), fetch: async () => ({ ok: false, json: async () => ({}) }),
-    crypto: { randomUUID: () => "11111111-2222-3333-4444-555555555555" }, AudioContext: class {}, Blob: class {}, URL, Date, Promise, JSON, Object, Array, Math, Uint8Array, performance, isSecureContext: false, copied: "",
+    crypto: { randomUUID: () => "11111111-2222-3333-4444-555555555555" }, AudioContext: class {}, Blob: class {}, URL, Date, Promise, JSON, Object, Array, Math, Uint8Array, TextDecoder, TextEncoder, performance, isSecureContext: false, copied: "",
+    ...env,
   });
   vm.runInContext(js, ctx);
   return { ctx, $, doc, win, stack, at: () => at, tick: () => new Promise((r) => setTimeout(r, 0)) };
@@ -154,4 +157,150 @@ test("every session starts with a start event, a fresh one too", () => {
   const html = screen({ name: "me" });
   assert.match(html, /markStart\(\)/);
   assert.equal(html.match(/markStart\(\);/g)!.length, 2);
+});
+
+/** A fake network: answers by path, and records every request. */
+function net(routes: Record<string, (body: any, url: string) => { status?: number; json: unknown }>) {
+  const calls: { url: string; body: any }[] = [];
+  const fetch = async (url: string, init?: { body?: string }) => {
+    const body = init?.body ? JSON.parse(init.body) : undefined;
+    calls.push({ url, body });
+    const path = url.split("?")[0];
+    const h = routes[path] ?? routes[Object.keys(routes).find((k) => k.endsWith("*") && path.startsWith(k.slice(0, -1))) ?? ""];
+    const out = h ? h(body, url) : { status: 404, json: { error: "no" } };
+    const text = JSON.stringify(out.json);
+    return { ok: (out.status ?? 200) < 400, status: out.status ?? 200, json: async () => out.json, body: { getReader: () => { let done = false; return { read: async () => (done ? { done: true } : ((done = true), { done: false, value: new TextEncoder().encode(text + "\n") })) }; } } };
+  };
+  return { fetch, calls };
+}
+class FakeAudio {
+  currentTime = 0; destination = {};
+  resume() {} close() {}
+  createAnalyser() { return { fftSize: 256, connect() {}, getByteTimeDomainData() {} }; }
+}
+const sockets: any[] = [];
+class FakeSocket { url: string; sent: string[] = []; onclose: any; onopen: any; onmessage: any; readyState = 1;
+  constructor(url: string) { this.url = url; sockets.push(this); }
+  send(s: string) { this.sent.push(s); } close(code: number) { this.readyState = 3; queueMicrotask(() => this.onclose?.({ code })); } }
+
+test("the starting mode is the dot's defaultMode until the person picks one", () => {
+  assert.equal(boot({ name: "me" }).$("#mode").textContent, "demo", "demo by default, so other dots don't change");
+  assert.equal(boot({ name: "me", defaultMode: "private" }).$("#mode").textContent, "private");
+  assert.equal(boot({ name: "me", defaultMode: "private" }, { localStorage: { demo: "1" } }).$("#mode").textContent, "demo", "a saved pick wins");
+  assert.equal(boot({ name: "me" }, { localStorage: { demo: "0" } }).$("#mode").textContent, "private");
+  assert.match(screen({ name: "me", defaultMode: "private" }), /"defaultMode":"private"/);
+  assert.match(screen({ name: "me", defaultMode: "nonsense" as any }), /"defaultMode":"demo"/);
+});
+
+test("switching mode switches typed chat and restarts an open Live session in the new mode", async () => {
+  sockets.length = 0;
+  const n = net({ "/api/token": () => ({ json: { token: "t", model: "m" } }), "/api/chat": () => ({ json: { reply: "ok" } }) });
+  const store: Record<string, string> = {};
+  const b = boot({ name: "me" }, { fetch: n.fetch, WebSocket: FakeSocket, AudioContext: FakeAudio, localStorage: store });
+  await b.$("#dot").onclick();
+  await b.tick();
+  assert.equal(sockets.length, 1);
+  assert.match(n.calls.at(-1)!.url, /\/token\?safe=1$/);
+  b.$("#mode").onclick();
+  await b.tick(); await b.tick();
+  assert.equal(store.demo, "0", "the pick is kept");
+  assert.equal(sockets[0].readyState, 3, "the demo session closed");
+  assert.equal(sockets.length, 2, "and a new one started");
+  assert.match(n.calls.filter((c) => c.url.includes("/token")).at(-1)!.url, /safe=0$/);
+  sockets[1].onopen();
+  assert.doesNotMatch(sockets[1].sent[0], /sessionResumption/, "no handle carried across modes");
+  await b.tick();
+  assert.ok(sockets.length === 2 && sockets[1].readyState === 1, "the old socket closing late doesn't take the new one");
+  b.$("#type").value = "hi";
+  await b.$("#type").onkeydown({ key: "Enter", target: b.$("#type") });
+  assert.equal(n.calls.find((c) => c.url.endsWith("/chat"))!.body.safe, false, "typed chat is private too");
+});
+
+test("private mode refused by the server drops back to demo", async () => {
+  sockets.length = 0;
+  const n = net({ "/api/token": (_b, url) => (url.endsWith("safe=0") ? { status: 403, json: { error: "private mode needs an allowed login" } } : { json: { token: "t", model: "m" } }) });
+  const b = boot({ name: "me", defaultMode: "private" }, { fetch: n.fetch, WebSocket: FakeSocket, AudioContext: FakeAudio });
+  await b.$("#dot").onclick();
+  await b.tick();
+  assert.equal(b.$("#mode").textContent, "demo");
+  assert.equal(sockets.length, 1, "it still starts, in demo");
+});
+
+test("a wordmark can put the cursor inside the name", () => {
+  assert.match(screen({ name: "hev dot", wordmark: ["hev", "dot"] }), /<div class="wm">hev<span class="cur mid"><\/span>dot</);
+  assert.match(screen({ name: "hev dot" }), /<div class="wm">hev dot<span class="cur"><\/span></);
+  assert.match(screen({ name: "x", wordmark: ["<b>", "y"] }), /&lt;b&gt;<span class="cur mid">/);
+});
+
+test("a semver goes on the tag; the short sha stays in the tag's title, the info pane and the log", async () => {
+  const version = { commit: "b".repeat(40), short: "bbbbbbb", built: "2026-10-13T09:30:00.000Z", semver: "1.4.0" };
+  const html = screen({ name: "me", version });
+  assert.match(html, /<button id="ver" title="bbbbbbb · copy the build" data-sha="bbbbbbb">1\.4\.0 · 2026-10-13<\/button>/);
+  assert.match(screen({ name: "me", version: { ...version, semver: "not<semver>" } }), />bbbbbbb · 2026-10-13</, "a bad semver falls back to the sha");
+  const b = boot({ name: "me", version });
+  assert.equal(b.$("#logStats").textContent, "1.4.0 · bbbbbbb");
+  await b.$("#ver").onclick();
+  await b.tick();
+  assert.equal(b.ctx.copied, "1.4.0 " + "b".repeat(40));
+});
+
+test("photos show as thumbnails in the user's turn, under the orb and in the log", async () => {
+  const n = net({ "/api/chat": () => ({ json: { reply: "a tree" } }) });
+  const b = boot({ name: "me" }, { fetch: n.fetch });
+  vm.runInContext("pending=[{mimeType:'image/jpeg',data:'QUJD',url:'data:image/jpeg;base64,QUJD',thumb:'data:image/jpeg;base64,VEhVTUI='}]", b.ctx);
+  b.$("#type").value = "what is it";
+  await b.$("#type").onkeydown({ key: "Enter", target: b.$("#type") });
+  const turn = b.$("#list").children.find((c: any) => c.className === "m u");
+  assert.equal(turn.text, "what is it");
+  const imgs = (el: any) => el.children.flatMap((c: any) => c.children).map((i: any) => i.src);
+  assert.deepEqual(imgs(turn), ["data:image/jpeg;base64,VEhVTUI="]);
+  assert.deepEqual(imgs(b.$("#you")), ["data:image/jpeg;base64,VEhVTUI="]);
+  assert.equal(b.$("#you").text, "“what is it”");
+  assert.equal(n.calls[0].body.images[0].thumb, "data:image/jpeg;base64,VEhVTUI=", "the thumb goes to the server for the thread");
+});
+
+test("the threads drawer lists past threads, resumes one, and closes on back", async () => {
+  const OLD = "aaaaaaaa-0000-0000-0000-000000000000";
+  const n = net({
+    "/api/threads": () => ({ json: { threads: [{ id: OLD, first: "how much on coffee", at: Date.now() - 3600_000 }] } }),
+    "/api/threads/*": () => ({ json: { id: OLD, lines: [{ k: "u", text: "how much on coffee", ts: 1, photos: ["data:image/jpeg;base64,QQ=="] }, { k: "d", text: "About forty.", ts: 2 }] } }),
+    "/api/chat": () => ({ json: { reply: "ok" } }),
+  });
+  const b = boot({ name: "me" }, { fetch: n.fetch });
+  await b.$("#threadsBtn").onclick();
+  assert.ok(b.$("#threads").classList.contains("on"));
+  assert.equal(b.$("#threads").inert, false);
+  assert.equal(b.stack.length, 2, "opening pushes a history entry, so back closes it");
+  const row = b.$("#threadList").children[0];
+  assert.match(row.innerHTML, /how much on coffee/);
+  assert.match(row.innerHTML, /1 h ago/);
+  // back (or swipe-back) closes it
+  b.ctx.window.history.back();
+  await b.tick();
+  assert.ok(!b.$("#threads").classList.contains("on"));
+  // open again and tap the thread
+  await b.$("#threadsBtn").onclick();
+  b.$("#threadList").children[0].onclick();
+  await b.tick(); await b.tick();
+  assert.ok(!b.$("#threads").classList.contains("on"));
+  const list = b.$("#list").children;
+  assert.deepEqual(list.map((c: any) => c.text), ["how much on coffee", "About forty."]);
+  assert.equal(list[0].children[0].children[0].src, "data:image/jpeg;base64,QQ==");
+  assert.equal(b.$("#say").textContent, "About forty.");
+  b.$("#type").value = "and tea?";
+  await b.$("#type").onkeydown({ key: "Enter", target: b.$("#type") });
+  assert.equal(n.calls.find((c) => c.url.endsWith("/chat"))!.body.session, OLD, "the session id carries on");
+  // new thread starts fresh
+  await b.$("#threadsBtn").onclick();
+  b.$("#newThread").onclick();
+  assert.equal(b.$("#list").children.length, 0);
+  assert.ok(!b.$("#threads").classList.contains("on"));
+});
+
+test("Escape closes the threads drawer", async () => {
+  const b = boot({ name: "me" }, { fetch: net({ "/api/threads": () => ({ json: { threads: [] } }) }).fetch });
+  await b.$("#threadsBtn").onclick();
+  assert.equal(b.$("#threadList").textContent, "No past threads yet.");
+  b.win.dispatchEvent({ type: "keydown", key: "Escape" });
+  assert.ok(!b.$("#threads").classList.contains("on"));
 });

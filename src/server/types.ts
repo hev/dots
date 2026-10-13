@@ -49,14 +49,20 @@ export type Card = {
   note?: string;
 };
 
-/** Which build is running: the full commit, a short form for display, and when it was built (ISO 8601). */
-export type Version = { commit: string; short: string; built: string };
+/**
+ * Which build is running: the full commit, a short form for display, and when it
+ * was built (ISO 8601). `semver` (e.g. "1.4.0") is the dot's own release, shown
+ * on the screen's tag in place of the sha; the sha stays in info and the log.
+ */
+export type Version = { commit: string; short: string; built: string; semver?: string };
 
 export type Ctx = {
   session: string;
   /** The verified login, or null when the identity adapter can't say who it is. */
   who: string | null;
   demo: boolean;
+  /** The user turn a call belongs to, set by surfaces that know their turns (the chat loop). Act receipts use it. */
+  turn?: string;
 };
 
 export type Tool = ToolDecl & {

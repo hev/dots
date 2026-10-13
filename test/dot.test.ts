@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { appTools, defineDot, defineTool, local, memorySink, redactor, type VoiceProvider } from "../src/server/index.ts";
+import { appTools, chat, defineDot, defineTool, gate, local, memorySink, memoryStore, redactor, type ChatModel, type VoiceProvider } from "../src/server/index.ts";
 import { declarations } from "../src/gemini-live/index.ts";
 
 const SESSION = "0123abcd-0000";
@@ -17,7 +17,7 @@ const tools = local([
   defineTool({ name: "deep_think", kind: "slow", description: "Ask a sub-agent.", run: async () => ({ answer: "retry it" }) }),
 ]);
 
-async function dot(live = true) {
+async function dot(live = true, receipts: { gapMs?: number; refusals?: number } = { gapMs: 0 }) {
   const traces = memorySink();
   const d = await defineDot({
     name: "test",
@@ -29,6 +29,7 @@ async function dot(live = true) {
     redact: { codenames: { Bristlecone: "Acme" } },
     traces,
     live,
+    receipts,
   });
   const call = async (name: string, args: Record<string, unknown> = {}, opts: { safe?: boolean; who?: string } = {}) => {
     const res = await d.fetch(
@@ -72,14 +73,109 @@ test("an act runs only after a read-back of the same arguments", async () => {
   assert.equal(ran.length, 0);
 
   const changed = await call("log_time", { duration: "2h", confirmed: true }, { who: ADAM });
-  assert.match(changed.body.error, /no read-back/);
+  assert.match(changed.body.readback.say, /^Not sent yet/, "a changed draft gets its own read-back, not a run");
   assert.equal(ran.length, 0);
 
   const ok = await call("log_time", { duration: "1h", confirmed: true }, { who: ADAM });
   assert.deepEqual(ok.body, { logged: "1h" });
+  assert.equal(ran.length, 1, "the normal flow runs once");
 
   const again = await call("log_time", { duration: "1h", confirmed: true }, { who: ADAM });
-  assert.match(again.body.error, /no read-back/, "a yes is spent once");
+  assert.match(again.body.readback.say, /^Not sent yet/, "a yes is spent once");
+  assert.equal(ran.length, 1);
+});
+
+test("a confirmed call with no receipt reads back instead of running, and the next yes matches", async () => {
+  const { call } = await dot();
+  ran.length = 0;
+  const first = await call("log_time", { duration: "3h", confirmed: true }, { who: ADAM });
+  assert.equal(first.body.error, undefined);
+  assert.equal(first.body.readback.action, "log_time");
+  assert.deepEqual(first.body.readback.args, { duration: "3h" });
+  assert.equal(first.body.readback.text, "log time, duration: 3h");
+  assert.match(first.body.readback.say, /^Not sent yet\. Read this exact text back/);
+  assert.equal(ran.length, 0, "not run");
+  const yes = await call("log_time", { duration: "3h", confirmed: true }, { who: ADAM });
+  assert.deepEqual(yes.body, { logged: "3h" });
+  assert.equal(ran.length, 1);
+});
+
+test("two confirmed calls in the same turn don't run the act", async () => {
+  ran.length = 0;
+  // By turn, as the chat loop sets it.
+  const store = memoryStore();
+  const S = "0123abcd-0001";
+  assert.ok("readback" in (await gate(store, S, "log_time", { duration: "1h", confirmed: true }, { turn: "t1" })));
+  const same = await gate(store, S, "log_time", { duration: "1h", confirmed: true }, { turn: "t1" });
+  assert.equal(same.run, false);
+  assert.match((same as any).readback.say, /Not sent yet/);
+  assert.equal((await gate(store, S, "log_time", { duration: "1h", confirmed: true }, { turn: "t2" })).run, true, "the next turn's yes runs it");
+
+  // By time, as the voice screen gets it: no turn, so the default gap holds.
+  const { call } = await dot(true, {});
+  await call("log_time", { duration: "1h" }, { who: ADAM });
+  const quick = await call("log_time", { duration: "1h", confirmed: true }, { who: ADAM });
+  assert.match(quick.body.readback.say, /Not sent yet/);
+  assert.equal(ran.length, 0, "not run");
+});
+
+test("the chat loop won't run an act the model confirms in the same turn", async () => {
+  ran.length = 0;
+  const model: ChatModel = {
+    name: "eager",
+    async turn({ history }) {
+      const last = history.at(-1)!;
+      // Reads back in its own words and confirms at once, each step of the turn.
+      if (last.role === "user" || (last.role === "tool" && history.filter((m) => m.role === "tool").length < 2))
+        return { calls: [{ id: "c", name: "log_time", args: { duration: "1h", confirmed: true } }] };
+      return { text: "Logging an hour, ok?" };
+    },
+  };
+  const d = await defineDot({ name: "t", persona: () => "p", voice, tools: [tools], logins: [ADAM], live: true, receipts: { gapMs: 0 } });
+  const c = chat({ dot: d, model, store: memoryStore(), surface: "text" });
+  const ctx = { session: SESSION, who: ADAM, demo: true };
+  await c.turn(ctx, "log an hour");
+  assert.equal(ran.length, 0, "same turn: not run");
+  await c.turn(ctx, "yes");
+  assert.equal(ran.length, 1, "the yes in the next turn runs it once");
+});
+
+test("after two refused confirmed calls the tool stops, and the model is told to stop", async () => {
+  const { call } = await dot();
+  ran.length = 0;
+  const a = await call("log_time", { duration: "1h", confirmed: true }, { who: ADAM });
+  const b = await call("log_time", { duration: "one hour", confirmed: true }, { who: ADAM });
+  assert.ok(a.body.readback && b.body.readback, "two refusals still read back");
+  const c = await call("log_time", { duration: "an hour", confirmed: true }, { who: ADAM });
+  assert.match(c.body.error, /^STOP\./);
+  assert.match(c.body.error, /did not go through/);
+  assert.match(c.body.error, /^STOP\. log_time was refused 3 times/);
+  assert.match(c.body.error, /Don't retry/);
+  // Off for this session, even with a matching yes.
+  const late = await call("log_time", { duration: "1h", confirmed: true }, { who: ADAM });
+  assert.match(late.body.error, /^STOP\./);
+  assert.match((await call("log_time", { duration: "1h" }, { who: ADAM })).body.error, /^STOP\./);
+  assert.equal(ran.length, 0);
+});
+
+test("a run clears the refusals, so honest misses spread over a session don't add up", async () => {
+  const { call } = await dot();
+  ran.length = 0;
+  for (const d of ["1h", "2h", "3h"]) {
+    await call("log_time", { duration: d + "x", confirmed: true }, { who: ADAM }); // a miss: reads back
+    await call("log_time", { duration: d }, { who: ADAM });
+    await call("log_time", { duration: d, confirmed: true }, { who: ADAM });
+  }
+  assert.equal(ran.length, 3);
+});
+
+test("act rules reach the persona, and acts declare confirmed", async () => {
+  const { d } = await dot();
+  assert.match(await d.persona(true, "voice"), /ALWAYS call the action first WITHOUT confirmed/);
+  assert.match(await d.persona(true, "voice"), /word for word, never your own paraphrase/);
+  const decl = d.registry.decls.find((x) => x.name === "log_time")!;
+  assert.equal(decl.parameters!.properties!.confirmed.type, "boolean");
+  assert.equal(d.registry.decls.find((x) => x.name === "pipeline")!.parameters, undefined, "other kinds are left alone");
 });
 
 test("acts dry-run unless the dot is live", async () => {
