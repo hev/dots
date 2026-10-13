@@ -123,6 +123,58 @@ async function preview() {
       }
       return "ok";
     });
+    await check("browser: header fits one row at 360px; log from info; build in info; lock in private mode", async () => {
+      const { chromium } = await playwright();
+      const b = await chromium.launch();
+      try {
+        mkdirSync(dir, { recursive: true });
+        for (const colorScheme of ["light", "dark"]) {
+          const p = await b.newPage({ viewport: { width: 360, height: 740 }, colorScheme });
+          const errors = [];
+          p.on("pageerror", (e) => errors.push(String(e)));
+          await p.goto(base + "/");
+          const h = await p.evaluate(() => {
+            const hd = document.querySelector("header");
+            const box = (s) => { const e = document.querySelector(s); if (!e || e.hidden) return null; const r = e.getBoundingClientRect(); return { x: r.left, y: r.top, w: r.width, h: r.height, right: r.right }; };
+            const btns = [...hd.querySelectorAll("button")].filter((e) => !e.hidden).map((e) => { const r = e.getBoundingClientRect(); return { id: e.id, w: r.width, h: r.height, top: r.top, right: r.right }; });
+            return { over: hd.scrollWidth > hd.clientWidth, width: hd.clientWidth, right: Math.max(...btns.map((x) => x.right)), btns, threads: box("#threadsBtn"), wm: box(".wm"), mode: box("#mode"), info: box("#infoBtn") };
+          });
+          expect(!h.over && h.right <= h.width, `header overflows: ${JSON.stringify(h)}`);
+          expect(new Set(h.btns.map((x) => Math.round(x.top))).size === 1, "header buttons on one row");
+          expect(h.btns.every((x) => x.w >= 40 && x.h >= 40), `tap targets under 40px: ${JSON.stringify(h.btns)}`);
+          expect(h.threads.right <= h.wm.x && h.wm.right <= h.mode.x && h.mode.right <= h.info.x, "order is ☰, wordmark, mode, i");
+          expect(!(await p.isVisible("#ver")) && !(await p.isVisible("#logBtn")), "build and log aren't on the screen");
+          // private mode: a shut lock, named for screen readers
+          if ((await p.getAttribute("#mode", "aria-label")) !== "private mode") await p.click("#mode");
+          expect((await p.getAttribute("#mode", "aria-label")) === "private mode", "mode switches to private");
+          expect(await p.isVisible("#mode svg"), "the lock is an svg");
+          await p.screenshot({ path: join(dir, `header-private-${colorScheme}.png`), clip: { x: 0, y: 0, width: 360, height: 80 } });
+          await p.click("#mode");
+          expect((await p.getAttribute("#mode", "aria-label")) === "demo mode", "and back to demo");
+          await p.screenshot({ path: join(dir, `header-demo-${colorScheme}.png`), clip: { x: 0, y: 0, width: 360, height: 80 } });
+          // info: the build, tap to copy; the log opens from it and closes back into it
+          await p.click("#infoBtn");
+          await p.waitForSelector("#info.on #ver");
+          expect((await p.textContent("#ver")).startsWith(commit.slice(0, 7)), "build shows the short sha");
+          await p.screenshot({ path: join(dir, `info-${colorScheme}.png`) });
+          await p.click("#logBtn");
+          await p.waitForSelector("#log.on");
+          await p.keyboard.press("Escape");
+          await p.waitForFunction(() => !document.querySelector("#log").classList.contains("on") && document.querySelector("#info").classList.contains("on"));
+          await p.click("#logBtn");
+          await p.waitForSelector("#log.on");
+          await p.goBack();
+          await p.waitForFunction(() => !document.querySelector("#log").classList.contains("on") && document.querySelector("#info").classList.contains("on"));
+          await p.goBack();
+          await p.waitForFunction(() => !document.querySelector("#info").classList.contains("on"));
+          expect(!errors.length, "page errors: " + errors.join("; "));
+          await p.close();
+        }
+      } finally {
+        await b.close();
+      }
+      return "ok";
+    });
     await check("browser: threads drawer lists, resumes, starts fresh; back and Escape close it", async () => {
       const { chromium } = await playwright();
       const b = await chromium.launch();

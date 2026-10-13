@@ -4,8 +4,9 @@
 // read back and run only on a matching yes; slow tools poll /api/job; display
 // tools ({url, label}) put a link on screen and the model hears only that it's up.
 // Typed questions are answered in text (POST /chat, when the dot has a text
-// model), so typing never wakes the voice. "info" lists the dot's tools and the
-// inbox it reads. ☰ opens the threads drawer: this user's past sessions (from
+// model), so typing never wakes the voice. The header is ☰, the wordmark, the
+// mode lock and "i". "i" opens info: the dot's tools, the inbox it reads, the log
+// of this session and the build (tap to copy). ☰ opens the threads drawer: this user's past sessions (from
 // GET /api/threads), newest first; a tap resumes one (its transcript and session
 // id), and "new thread" (or typing /clear) starts fresh: the screen empties, the
 // Live session and its resumption handle go, and the next turn gets a new session id.
@@ -74,8 +75,8 @@ export type ScreenOptions = {
    *  `open_app` tool (appTools), a card's `app`, or `window.dotApps.open(name)`; back, the pill or a voice
    *  close ends it. Trusted strings from the dot's author. */
   apps?: Record<string, AppDef>;
-  /** The running build (gitVersion in /version). Shows a small tag, short sha · date (or semver · date when the version
-   *  has one), that copies the release and full commit on tap. The info pane and the log keep the short sha. */
+  /** The running build (gitVersion in /version). Info's Build row shows short sha · date (or semver · date when the
+   *  version has one) and copies the release and full commit on tap. Its title and the log keep the short sha. */
   version?: Version;
   /** The dot's own earcons: notes as [hz, seconds], with an oscillator type, gain and gap. */
   sounds?: Partial<Record<"tick" | "working" | "card" | "link" | "error", Sound>>;
@@ -143,8 +144,8 @@ ${o.design?.head ?? ""}
 <body>
 <div class="app">
 ${o.design?.decor ? `<div id="decor" aria-hidden="true">${o.design.decor}</div>` : ""}
-  <header><div class="wm">${wm}${o.subtitle ? `<span class="sfx">${esc(o.subtitle)}</span>` : ""}</div>
-    <button id="install" hidden>install</button><button id="threadsBtn" aria-label="threads" aria-haspopup="dialog" aria-controls="threads" title="your threads">☰</button><button id="mode"></button><button id="infoBtn">info</button><button id="logBtn">log</button></header>
+  <header><button id="threadsBtn" class="ic" aria-label="threads" aria-haspopup="dialog" aria-controls="threads" title="your threads">☰</button><div class="wm">${wm}${o.subtitle ? `<span class="sfx">${esc(o.subtitle)}</span>` : ""}</div>
+    <button id="install" hidden>install</button><button id="mode" class="ic"></button><button id="infoBtn" class="ic" aria-label="info" title="info">i</button></header>
   <main>
     <button id="dot" aria-label="talk"><span id="halo"></span>${o.orb ? `<img id="core" class="art" src="${esc(o.orb)}" alt="">` : `<span id="core"></span>`}</button>
     <div id="status">tap to talk</div>
@@ -153,12 +154,11 @@ ${o.design?.decor ? `<div id="decor" aria-hidden="true">${o.design.decor}</div>`
   </main>
   <footer><div id="pending"></div><div class="row"><button id="attach" aria-label="add a photo" title="add a photo">📷</button><input id="photo" type="file" accept="image/*" multiple hidden><input id="type" placeholder="or type" autocomplete="off"></div></footer>
   <section id="log"><div class="bar"><span id="logStats"></span><button id="copyLog">copy</button><button id="logClose">close</button></div><div id="list"></div></section>
-  <section id="info"><div class="bar"><span>${esc(o.name)}</span><button id="infoClose">close</button></div><div id="about"></div></section>
+  <section id="info"><div class="bar"><span>${esc(o.name)}</span><button id="infoClose">close</button></div><div id="infoBody"><button id="logBtn" class="row"><b>log</b><i>this session's turns and tool calls</i></button><div id="about"></div>${v ? `<h3>Build</h3><button id="ver" class="row" title="${esc(v.short)} · copy the build" data-sha="${esc(v.short)}">${esc(semver(v.semver) ? v.semver! : v.short)} · ${esc(v.built.slice(0, 10))}</button>` : ""}</div></section>
   <div id="scrim"></div>
   <section id="threads" role="dialog" aria-modal="true" aria-label="threads" inert><div class="bar"><span>threads</span><button id="newThread">new thread</button><button id="threadsClose" aria-label="close threads">close</button></div><div id="threadList"></div></section>
   <section id="apps" aria-label="app"></section>
   <button id="pill" aria-label="back to chat" hidden><i id="pillDot"></i><span id="pillText"></span></button>
-  ${v ? `<button id="ver" title="${esc(v.short)} · copy the build" data-sha="${esc(v.short)}">${esc(semver(v.semver) ? v.semver! : v.short)} · ${esc(v.built.slice(0, 10))}</button>` : ""}
   <div id="toast"></div>
 </div>
 <script>const CFG=${json};
@@ -195,12 +195,16 @@ html,body{margin:0;height:100%;background:var(--paper);color:var(--ink);font-fam
 body{display:flex;justify-content:center}
 button{font:inherit;color:inherit;background:none;border:1px solid var(--rule);border-radius:99px;padding:4px 10px;font-size:13px;cursor:pointer}
 .app{width:100%;max-width:430px;height:100dvh;display:flex;flex-direction:column;position:relative;overflow:hidden}
-header{display:flex;align-items:center;gap:8px;padding:max(14px,env(safe-area-inset-top)) 16px 8px}
-.wm{font:700 19px var(--mono);margin-right:auto;display:flex;align-items:center}
+header{display:flex;align-items:center;gap:6px;padding:max(10px,env(safe-area-inset-top)) 12px 6px}
+header>button{flex:none;min-height:40px}
+header .ic{width:40px;height:40px;padding:0;display:inline-flex;align-items:center;justify-content:center}
+.wm{font:700 19px var(--mono);margin-right:auto;display:flex;align-items:center;min-width:0;overflow:hidden;white-space:nowrap}
 .wm .cur{display:inline-block;width:.5em;height:1em;background:var(--sig);margin-left:.16em;animation:blink 1.2s steps(2) infinite}
 .wm .cur.mid{margin-right:.16em}
-#threadsBtn{font-size:15px;line-height:1;padding:4px 9px}
-.wm .sfx{color:var(--muted);font-weight:500;margin-left:.4em}
+#threadsBtn{font-size:17px;line-height:1;border:0}
+#infoBtn{font:italic 600 16px Georgia,serif}
+#mode svg{display:block}
+.wm .cur{flex:none}.wm .sfx{color:var(--muted);font-weight:500;margin-left:.4em;overflow:hidden;text-overflow:ellipsis}
 @keyframes blink{50%{opacity:0}}
 #mode.priv{border-color:var(--second,var(--sig));color:var(--second,var(--sig))}
 main{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:0 16px;min-height:0}
@@ -239,8 +243,11 @@ footer .row{display:flex;gap:8px;align-items:center}
 #log,#info{position:absolute;inset:0;background:var(--paper);display:none;flex-direction:column}
 #log.on,#info.on{display:flex}
 #info .bar span{margin-right:auto;font:700 15px var(--mono)}
-#about{flex:1;overflow:auto;padding:0 16px 16px;font-size:14px}
-#about h3{font:600 12px var(--mono);color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin:16px 0 6px}
+#infoBody{flex:1;overflow:auto;padding:0 16px 16px;font-size:14px}
+#infoBody .row{display:flex;align-items:baseline;gap:8px;width:100%;min-height:44px;text-align:left;border-radius:12px;padding:10px 12px;background:var(--card);font-size:14px}
+#infoBody .row i{font:12px var(--mono);color:var(--muted);font-style:normal}
+#ver{font:13px var(--mono)}
+#infoBody h3,#about h3{font:600 12px var(--mono);color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin:16px 0 6px}
 #about .tl{padding:7px 0;border-bottom:1px solid var(--rule)}#about .tl b{font-weight:600}#about .tl i{font:11px var(--mono);color:var(--sig);font-style:normal;margin-left:6px}
 #about .tl div{color:var(--muted);font-size:13px;margin-top:2px}#about a{color:var(--sig)}
 #log .bar,#info .bar{display:flex;gap:8px;align-items:center;padding:max(14px,env(safe-area-inset-top)) 16px 8px}
@@ -255,7 +262,7 @@ footer .row{display:flex;gap:8px;align-items:center}
 #toast.on{opacity:1}
 #decor{position:absolute;inset:0;pointer-events:none;overflow:hidden;z-index:0}
 header,main,footer{position:relative;z-index:1}
-#log,#info{z-index:2}#toast{z-index:7}
+#info{z-index:2}#log{z-index:3}#toast{z-index:7}
 #scrim{position:absolute;inset:0;z-index:6;background:#0005;opacity:0;pointer-events:none;transition:opacity .2s}#scrim.on{opacity:1;pointer-events:auto}
 #threads{position:absolute;z-index:6;top:0;bottom:0;left:0;width:min(86%,360px);background:var(--paper);border-right:1px solid var(--rule);display:flex;flex-direction:column;transform:translateX(-102%);transition:transform .2s;visibility:hidden}
 #threads.on{transform:none;visibility:visible}
@@ -273,7 +280,6 @@ header,main,footer{position:relative;z-index:1}
 #pill.on #pillDot{background:var(--sig);box-shadow:0 0 8px 2px color-mix(in srgb,var(--sig) 60%,transparent)}
 #pill.connecting #pillDot{animation:pulse 1s ease-in-out infinite}
 #pillText{font:500 12px var(--mono);color:var(--muted);max-width:42vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-#ver{position:absolute;z-index:5;left:8px;bottom:0;border:0;border-radius:6px;padding:1px 5px;font:10px var(--mono);color:var(--muted);opacity:.75}
 `;
 
 // Plain browser JS. CFG comes from the server. Kept in step with hev dot's
@@ -292,7 +298,9 @@ let ws=null, ready=false, handle=null, wantMic=true, micOpen=false, sayText='', 
    mode, without the old one's resumption handle (it would carry private answers into demo). */
 let demo=CFG.modes&&(keep('demo')??(CFG.defaultMode==='private'?'0':'1'))!=='0';
 if(!CFG.modes) $('#mode').hidden=true;
-function drawMode(){ $('#mode').textContent=demo?'demo':'private'; $('#mode').classList.toggle('priv',!demo); }
+/* a lock, drawn in currentColor so it themes: shut in private mode, open in demo. The words are its accessible name. */
+const LOCK=shut=>'<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="'+(shut?'M8 11V7a4 4 0 0 1 8 0v4':'M8 11V7a4 4 0 0 1 7.7-1.5')+'"/></svg>';
+function drawMode(){ const m=$('#mode'), l=demo?'demo mode':'private mode'; m.innerHTML=LOCK(!demo); m.setAttribute('aria-label',l); m.title=l; m.dataset.mode=demo?'demo':'private'; m.classList.toggle('priv',!demo); }
 $('#mode').onclick=()=>{ demo=!demo; keep('demo',demo?'1':'0'); drawMode();
   toast(demo?'Demo mode: no amounts or contact details.':'Private mode: full numbers.');
   if(ws){ const mic=wantMic; stop(); handle=null; start({mic,quiet:true}); } };
@@ -325,14 +333,24 @@ function logTool(fc,result,ms){ const err=!!result?.error, body=JSON.stringify(r
   const ts=trace.filter(x=>x.kind==='tool'); $('#logStats').textContent=(build?build+' · ':'')+ts.length+' tool calls · '+ts.filter(x=>x.error).length+' errors'; }
 /* info: the tools, as the dot sees them, and the inbox it reads */
 const KIND={act:'needs a yes',private:'private mode',display:'shows on screen',slow:'sub-agent'};
-$('#infoBtn').onclick=async()=>{ $('#info').classList.add('on'); const box=$('#about'); box.textContent='…';
+/* info and the log: panes over the chat. Each open pushes a history entry, so back (and Escape) closes the top one;
+   the log opens from inside info, so closing it lands back in info. */
+const pane=(id,on)=>{ $(id).classList.toggle('on',on); };
+const isOn=id=>$(id).classList.contains('on');
+function openLog(){ if(isOn('#log')) return; pane('#log',true); history.pushState({dotLog:1},''); $('#logClose').focus?.(); }
+function closeLog(){ if(!isOn('#log')) return; pane('#log',false); $('#logBtn').focus?.(); if(history.state?.dotLog) history.back(); }
+function closeInfo(){ if(!isOn('#info')) return; closeLog(); pane('#info',false); $('#infoBtn').focus?.(); if(history.state?.dotInfo) history.back(); }
+addEventListener('popstate',()=>{ const s=history.state;
+  if(isOn('#log')&&!s?.dotLog){ pane('#log',false); $('#logBtn').focus?.(); }
+  if(isOn('#info')&&!s?.dotLog&&!s?.dotInfo){ pane('#info',false); $('#infoBtn').focus?.(); } });
+addEventListener('keydown',e=>{ if(e.key!=='Escape') return; if(isOn('#log')) closeLog(); else if(isOn('#info')) closeInfo(); });
+$('#infoBtn').onclick=async()=>{ if(isOn('#info')) return; pane('#info',true); history.pushState({dotInfo:1},''); $('#infoClose').focus?.(); const box=$('#about'); box.textContent='…';
   const i=await fetch(API+'/info').then(r=>r.json()).catch(()=>null); if(!i||i.error){ box.textContent='Couldn’t load the tool list.'; return; }
   box.innerHTML=(i.inbox?'<h3>Inbox</h3><div class="tl">Forward mail to <a href="mailto:'+esc(i.inbox)+'">'+esc(i.inbox)+'</a> and your dot can read it.</div>':'')+
     '<h3>Tools · '+i.tools.length+'</h3>'+i.tools.map(t=>'<div class="tl"><b>'+esc(label(t.name))+'</b>'+(KIND[t.kind]?'<i>'+KIND[t.kind]+'</i>':'')+'<div>'+esc(t.description)+'</div></div>').join('')+
     '<h3>Modes</h3><div class="tl">Tap the dot to talk; type to get answers in text.'+(CFG.modes?' '+(demo?'Demo mode hides amounts and contact details.':'Private mode shows real numbers.'):'')+'</div>'+
-    (i.version?'<h3>Build</h3><div class="tl">'+(i.version.semver?'<b>'+esc(i.version.semver)+'</b> · ':'')+esc(i.version.short)+' · '+esc(String(i.version.built).slice(0,10))+'</div>':''); };
-$('#infoClose').onclick=()=>$('#info').classList.remove('on');
-$('#logBtn').onclick=()=>$('#log').classList.add('on'); $('#logClose').onclick=()=>$('#log').classList.remove('on');
+    (i.version&&!CFG.version?'<h3>Build</h3><div class="tl">'+(i.version.semver?'<b>'+esc(i.version.semver)+'</b> · ':'')+esc(i.version.short)+' · '+esc(String(i.version.built).slice(0,10))+'</div>':''); };
+$('#infoClose').onclick=closeInfo; $('#logBtn').onclick=openLog; $('#logClose').onclick=closeLog;
 $('#copyLog').onclick=()=>navigator.clipboard?.writeText(JSON.stringify(trace,null,1)).then(()=>toast('Copied as JSON')).catch(()=>toast('Copy blocked'));
 
 /* audio out: 24 kHz PCM16, scheduled back to back */
@@ -526,7 +544,7 @@ $('#photo').onchange=async e=>{ const files=[...e.target.files].slice(0,4-pendin
 function reset(sid){ ship(false); gen++; busy=0; stop(); handle=null; apps.close(); resumed=null;
   SID=sid||newSid(); T0=Date.now(); trace=[]; seq=0;
   for(const s of ['#list','#links','#chips','#you','#say','#logStats']) $(s).textContent='';
-  markStart(); $('#log').classList.remove('on'); status('tap to talk'); }
+  markStart(); closeLog(); status('tap to talk'); }
 function fresh(){ log('t','cleared'); reset(); toast('Fresh start.'); }
 
 /* threads: this user's past sessions, kept by the server. A tap resumes one: its transcript comes back, the session id

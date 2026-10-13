@@ -138,7 +138,12 @@ const dot = await defineDot({
 const page = screenRoutes({ name: "me", orb: "/icon-512.png" });
 ```
 
-The screen's **info** pane lists the tools (from `GET /api/info`) and the inbox.
+The screen's header is ☰, the wordmark, the mode switch (a lock: shut in
+private mode, open in demo, named "private mode" / "demo mode" for screen
+readers) and a compact **i**. It fits one row on a 360px phone, with 40px tap
+targets. **i** opens the info pane: the tools (from `GET /api/info`), the inbox,
+a **log** row that opens this session's log (Escape, back or close return to
+info) and the Build line.
 `orb` puts the dot's own art in the middle of the screen.
 
 ## Sound and modes
@@ -259,8 +264,8 @@ const page = screenRoutes({
 ## Version tag
 
 `defineDot({ version })` and `screenRoutes({ version })` take `{ commit, short, built }`
-(`built` is ISO 8601). The screen shows a small always-visible tag, short sha and
-date, in the bottom-left corner; tapping it copies the full commit. `GET /api/info`
+(`built` is ISO 8601). The info pane's Build line shows the short sha and date;
+tapping it copies the full commit. `GET /api/info`
 returns it as `version`, and the trace for each session opens with a `session
 start` line carrying it. `gitVersion()` from `/version` reads it from the checkout
 at startup (Node only, so it sits outside `/server`; on Workers pass the commit in
@@ -275,9 +280,8 @@ const page = screenRoutes({ name: "mine", version });
 ```
 
 A dot with releases adds `semver` (e.g. `{ ...gitVersion(), semver: "1.4.0" }`):
-the tag then shows `1.4.0 · date`, with the short sha in its title and
-`data-sha`, and a tap copies `1.4.0 <commit>`. The short sha stays in the info
-pane's Build line, at the top of the log and on the log's `start` event, for
+the Build line then shows `1.4.0 · date`, with the short sha in its title and
+`data-sha`, and a tap copies `1.4.0 <commit>`. The short sha stays at the top of the log and on the log's `start` event, for
 issue reports. Anything that isn't semver is ignored and the sha shows.
 
 ## Routes
@@ -331,7 +335,11 @@ one JSON line, `{"passed", "version", "checks"}`.
   fixture dot (`scripts/uat-server.ts`: fake voice and text model, no live
   writes) on a free loopback port, checks it over HTTP and in headless
   Chromium (apps open, back closes, the session survives; the threads drawer
-  lists, resumes and starts fresh, and back and Escape close it), and stops it.
+  lists, resumes and starts fresh, and back and Escape close it; at 360px, light
+  and dark, the header fits one row with 40px targets in the order ☰, wordmark,
+  lock, i, private mode shows the lock, the build sits in info, and the log
+  opens from info and closes back into it), and stops it. Header and info
+  screenshots go to `UAT_DIR`.
   Playwright must be resolvable (`NODE_PATH` or a global install).
 - `scripts/uat live <base-url>` is read-only: `/api/info` must report
   `UAT_COMMIT`, and the screen must serve with that commit's tag.
