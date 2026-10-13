@@ -149,12 +149,24 @@ test("after two refused confirmed calls the tool stops, and the model is told to
   const c = await call("log_time", { duration: "an hour", confirmed: true }, { who: ADAM });
   assert.match(c.body.error, /^STOP\./);
   assert.match(c.body.error, /did not go through/);
+  assert.match(c.body.error, /^STOP\. log_time was refused 3 times/);
   assert.match(c.body.error, /Don't retry/);
   // Off for this session, even with a matching yes.
   const late = await call("log_time", { duration: "1h", confirmed: true }, { who: ADAM });
   assert.match(late.body.error, /^STOP\./);
   assert.match((await call("log_time", { duration: "1h" }, { who: ADAM })).body.error, /^STOP\./);
   assert.equal(ran.length, 0);
+});
+
+test("a run clears the refusals, so honest misses spread over a session don't add up", async () => {
+  const { call } = await dot();
+  ran.length = 0;
+  for (const d of ["1h", "2h", "3h"]) {
+    await call("log_time", { duration: d + "x", confirmed: true }, { who: ADAM }); // a miss: reads back
+    await call("log_time", { duration: d }, { who: ADAM });
+    await call("log_time", { duration: d, confirmed: true }, { who: ADAM });
+  }
+  assert.equal(ran.length, 3);
 });
 
 test("act rules reach the persona, and acts declare confirmed", async () => {

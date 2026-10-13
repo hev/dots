@@ -5,8 +5,10 @@
 // tools ({url, label}) put a link on screen and the model hears only that it's up.
 // Typed questions are answered in text (POST /chat, when the dot has a text
 // model), so typing never wakes the voice. "info" lists the dot's tools and the
-// inbox it reads. "new" (or typing /clear) ends the session: the screen empties, the Live
-// session and its resumption handle go, and the next turn starts a fresh session id.
+// inbox it reads. ☰ opens the threads drawer: this user's past sessions (from
+// GET /api/threads), newest first; a tap resumes one (its transcript and session
+// id), and "new thread" (or typing /clear) starts fresh: the screen empties, the
+// Live session and its resumption handle go, and the next turn gets a new session id.
 //
 // Earcons mark tool calls (a tick to start, a soft pulse while checking, a
 // chord for a card or link, a low pair for an error). With `cues`, short spoken
@@ -17,7 +19,7 @@
 // same page; see apps.ts. While one is open the orb becomes a pill, and back closes it.
 //
 // Extracted from hev dot's web/index.html, minus what's hev mind's own
-// (sub-agents, images, dead-air nuggets). A dot serves it with
+// (sub-agents, dead-air nuggets). A dot serves it with
 // `screenRoutes(opts)`, chained ahead of `dot.fetch`.
 
 import { installHead, type InstallOptions } from "../install/index.ts";
@@ -27,6 +29,8 @@ import { APPS } from "./apps.ts";
 export type ScreenOptions = {
   /** Shown as the wordmark and the page title. */
   name: string;
+  /** The wordmark in two parts, with the blinking cursor between them: ["hev", "dot"] draws hev▌dot. Default the name, then the cursor. */
+  wordmark?: [string, string];
   /** Under the wordmark, e.g. "finance". */
   subtitle?: string;
   /** Who the dot talks to, for the app's notes to the model. Default "the user". */
@@ -47,6 +51,9 @@ export type ScreenOptions = {
   theme?: { light?: Palette; dark?: Palette };
   /** false hides the demo/private switch and always runs private, for a dot with nothing to hide. Default true. */
   modes?: boolean;
+  /** The mode a screen starts in until the person picks one (their pick is kept on the device and wins). Default "demo".
+   *  The server still refuses private mode to anyone not allowed; the screen then drops back to demo. */
+  defaultMode?: "demo" | "private";
   /** Play spoken cues from the dot's `<base>/cue` (see cueRoutes). Default false. */
   cues?: boolean;
   /** The dot's own look, past colors. Trusted strings from the dot's author, never from a user. */
@@ -67,7 +74,8 @@ export type ScreenOptions = {
    *  `open_app` tool (appTools), a card's `app`, or `window.dotApps.open(name)`; back, the pill or a voice
    *  close ends it. Trusted strings from the dot's author. */
   apps?: Record<string, AppDef>;
-  /** The running build (gitVersion in /version). Shows a small tag, short sha · date, that copies the commit on tap. */
+  /** The running build (gitVersion in /version). Shows a small tag, short sha · date (or semver · date when the version
+   *  has one), that copies the release and full commit on tap. The info pane and the log keep the short sha. */
   version?: Version;
   /** The dot's own earcons: notes as [hz, seconds], with an oscillator type, gain and gap. */
   sounds?: Partial<Record<"tick" | "working" | "card" | "link" | "error", Sound>>;
@@ -111,14 +119,17 @@ export function screen(o: ScreenOptions): string {
     base: o.base ?? "/api",
     modes: o.modes !== false,
     cues: !!o.cues,
+    defaultMode: o.defaultMode === "private" ? "private" : "demo",
     greeting: o.greeting ?? null,
     sounds: o.sounds ?? {},
     apps: Object.fromEntries(Object.entries(o.apps ?? {}).map(([k, a]) => [k, { title: a.title, html: a.html, script: a.script, module: a.module }])),
-    version: o.version ? { commit: o.version.commit, short: o.version.short, built: o.version.built } : null,
+    version: o.version ? { commit: o.version.commit, short: o.version.short, built: o.version.built, ...(semver(o.version.semver) ? { semver: o.version.semver } : {}) } : null,
   };
   // JSON inside <script> must not close the tag.
   const json = JSON.stringify(cfg).replace(/</g, "\\u003c");
   const accent = o.accent ?? "#e25822";
+  const wm = o.wordmark ? `${esc(o.wordmark[0])}<span class="cur mid"></span>${esc(o.wordmark[1])}` : `${esc(o.name)}<span class="cur"></span>`;
+  const v = o.version;
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -132,8 +143,8 @@ ${o.design?.head ?? ""}
 <body>
 <div class="app">
 ${o.design?.decor ? `<div id="decor" aria-hidden="true">${o.design.decor}</div>` : ""}
-  <header><div class="wm">${esc(o.name)}<span class="cur"></span>${o.subtitle ? `<span class="sfx">${esc(o.subtitle)}</span>` : ""}</div>
-    <button id="install" hidden>install</button><button id="new" title="clear the conversation and start fresh">new</button><button id="mode"></button><button id="infoBtn">info</button><button id="logBtn">log</button></header>
+  <header><div class="wm">${wm}${o.subtitle ? `<span class="sfx">${esc(o.subtitle)}</span>` : ""}</div>
+    <button id="install" hidden>install</button><button id="threadsBtn" aria-label="threads" aria-haspopup="dialog" aria-controls="threads" title="your threads">☰</button><button id="mode"></button><button id="infoBtn">info</button><button id="logBtn">log</button></header>
   <main>
     <button id="dot" aria-label="talk"><span id="halo"></span>${o.orb ? `<img id="core" class="art" src="${esc(o.orb)}" alt="">` : `<span id="core"></span>`}</button>
     <div id="status">tap to talk</div>
@@ -143,9 +154,11 @@ ${o.design?.decor ? `<div id="decor" aria-hidden="true">${o.design.decor}</div>`
   <footer><div id="pending"></div><div class="row"><button id="attach" aria-label="add a photo" title="add a photo">📷</button><input id="photo" type="file" accept="image/*" multiple hidden><input id="type" placeholder="or type" autocomplete="off"></div></footer>
   <section id="log"><div class="bar"><span id="logStats"></span><button id="copyLog">copy</button><button id="logClose">close</button></div><div id="list"></div></section>
   <section id="info"><div class="bar"><span>${esc(o.name)}</span><button id="infoClose">close</button></div><div id="about"></div></section>
+  <div id="scrim"></div>
+  <section id="threads" role="dialog" aria-modal="true" aria-label="threads" inert><div class="bar"><span>threads</span><button id="newThread">new thread</button><button id="threadsClose" aria-label="close threads">close</button></div><div id="threadList"></div></section>
   <section id="apps" aria-label="app"></section>
   <button id="pill" aria-label="back to chat" hidden><i id="pillDot"></i><span id="pillText"></span></button>
-  ${o.version ? `<button id="ver" title="copy the commit">${esc(o.version.short)} · ${esc(o.version.built.slice(0, 10))}</button>` : ""}
+  ${v ? `<button id="ver" title="${esc(v.short)} · copy the build" data-sha="${esc(v.short)}">${esc(semver(v.semver) ? v.semver! : v.short)} · ${esc(v.built.slice(0, 10))}</button>` : ""}
   <div id="toast"></div>
 </div>
 <script>const CFG=${json};
@@ -153,6 +166,9 @@ ${SCRIPT}${o.design?.script ? `\n;(()=>{${o.design.script}\n})();` : ""}</script
 </body>
 </html>`;
 }
+
+const SEMVER = /^v?\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$/;
+const semver = (s: unknown): s is string => typeof s === "string" && s.length <= 64 && SEMVER.test(s);
 
 function theme(t: ScreenOptions["theme"]): string {
   if (!t) return "";
@@ -182,6 +198,8 @@ button{font:inherit;color:inherit;background:none;border:1px solid var(--rule);b
 header{display:flex;align-items:center;gap:8px;padding:max(14px,env(safe-area-inset-top)) 16px 8px}
 .wm{font:700 19px var(--mono);margin-right:auto;display:flex;align-items:center}
 .wm .cur{display:inline-block;width:.5em;height:1em;background:var(--sig);margin-left:.16em;animation:blink 1.2s steps(2) infinite}
+.wm .cur.mid{margin-right:.16em}
+#threadsBtn{font-size:15px;line-height:1;padding:4px 9px}
 .wm .sfx{color:var(--muted);font-weight:500;margin-left:.4em}
 @keyframes blink{50%{opacity:0}}
 #mode.priv{border-color:var(--second,var(--sig));color:var(--second,var(--sig))}
@@ -196,6 +214,8 @@ main{flex:1;display:flex;flex-direction:column;align-items:center;justify-conten
 @keyframes pulse{50%{opacity:.4}}
 #status{font:500 13px var(--mono);color:var(--muted)}
 #you{color:var(--muted);font-size:15px;text-align:center;min-height:1.2em}
+#you .ph,.m .ph{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}#you .ph{justify-content:center}
+#you .ph img,.m .ph img{width:64px;height:64px;object-fit:cover;border-radius:10px;border:1px solid var(--rule);display:block;margin:0}
 #say{font-size:19px;line-height:1.35;text-align:center;max-height:30dvh;overflow:auto}
 #chips{display:flex;flex-wrap:wrap;gap:6px;justify-content:center}
 .chip{font:500 12px var(--mono);border:1px solid var(--second,var(--rule));border-radius:99px;padding:3px 9px;color:var(--second,var(--muted))}
@@ -235,7 +255,15 @@ footer .row{display:flex;gap:8px;align-items:center}
 #toast.on{opacity:1}
 #decor{position:absolute;inset:0;pointer-events:none;overflow:hidden;z-index:0}
 header,main,footer{position:relative;z-index:1}
-#log,#info{z-index:2}#toast{z-index:6}
+#log,#info{z-index:2}#toast{z-index:7}
+#scrim{position:absolute;inset:0;z-index:6;background:#0005;opacity:0;pointer-events:none;transition:opacity .2s}#scrim.on{opacity:1;pointer-events:auto}
+#threads{position:absolute;z-index:6;top:0;bottom:0;left:0;width:min(86%,360px);background:var(--paper);border-right:1px solid var(--rule);display:flex;flex-direction:column;transform:translateX(-102%);transition:transform .2s;visibility:hidden}
+#threads.on{transform:none;visibility:visible}
+#threads .bar{display:flex;gap:8px;align-items:center;padding:max(14px,env(safe-area-inset-top)) 12px 8px 16px}#threads .bar span{margin-right:auto;font:700 15px var(--mono)}
+#threadList{flex:1;overflow:auto;padding:0 8px max(14px,env(safe-area-inset-bottom));font-size:14px;color:var(--muted)}
+#threadList .th{display:block;width:100%;text-align:left;border:0;border-radius:10px;padding:10px 8px;color:var(--ink)}
+#threadList .th:hover,#threadList .th:focus-visible{background:var(--card)}#threadList .th.cur{background:var(--card)}
+#threadList .th span{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}#threadList .th i{font:11px var(--mono);color:var(--muted);font-style:normal}
 #apps{position:absolute;inset:0;z-index:3;background:var(--paper);display:none;flex-direction:column}
 #apps.on{display:flex}
 .app-view{flex:1;min-height:0;overflow:auto;padding:max(54px,calc(env(safe-area-inset-top) + 40px)) 16px 20px}
@@ -259,37 +287,50 @@ const label=n=>CFG.labels[n]||n.replace(/_/g,' ');
 function toast(m){ const t=$('#toast'); t.textContent=m; t.classList.add('on'); clearTimeout(t._h); t._h=setTimeout(()=>t.classList.remove('on'),3500); }
 let ws=null, ready=false, handle=null, wantMic=true, micOpen=false, sayText='', youText='', wake=null, busy=0, gen=0;
 
-/* demo vs private: the server refuses private mode to anyone not allowed */
-let demo=CFG.modes&&keep('demo')!=='0';
+/* demo vs private: the person's pick, else the dot's defaultMode. The server refuses private mode to anyone not allowed.
+   Typed turns read the mode as they go; a Live session is locked to its token, so a switch starts it again in the new
+   mode, without the old one's resumption handle (it would carry private answers into demo). */
+let demo=CFG.modes&&(keep('demo')??(CFG.defaultMode==='private'?'0':'1'))!=='0';
 if(!CFG.modes) $('#mode').hidden=true;
 function drawMode(){ $('#mode').textContent=demo?'demo':'private'; $('#mode').classList.toggle('priv',!demo); }
-$('#mode').onclick=()=>{ demo=!demo; keep('demo',demo?'1':'0'); drawMode(); if(ws){ stop(); toast(demo?'Demo mode: no amounts or contact details.':'Private mode: full numbers. Tap to start again.'); } };
+$('#mode').onclick=()=>{ demo=!demo; keep('demo',demo?'1':'0'); drawMode();
+  toast(demo?'Demo mode: no amounts or contact details.':'Private mode: full numbers.');
+  if(ws){ const mic=wantMic; stop(); handle=null; start({mic,quiet:true}); } };
+/* refused private mode (not an allowed login): back to demo for now, without saving it */
+function refusedPrivate(){ demo=true; drawMode(); toast('Private mode needs an allowed login. Demo mode.'); }
 drawMode();
 
 /* transcript, shipped to /trace every few seconds */
 const newSid=()=>(crypto.randomUUID?.()||Date.now().toString(16)+Math.random().toString(16).slice(2)).toLowerCase();
 let SID=newSid(), T0=Date.now(), trace=[], unsent=[], seq=0;
 function rec(e){ e.id=SID.slice(0,8)+'-'+(++seq); e.ts=new Date().toISOString(); trace.push(e); unsent.push(e); }
-const markStart=()=>rec({t:0,kind:'start'}); markStart();
+const build=CFG.version?(CFG.version.semver?CFG.version.semver+' · ':'')+CFG.version.short:'';
+const markStart=()=>{ rec({t:0,kind:'start',...(CFG.version?{build:CFG.version.short,...(CFG.version.semver?{semver:CFG.version.semver}:{})}:{})}); $('#logStats').textContent=build; }; markStart();
 function ship(beacon){ if(!unsent.length) return; const body=JSON.stringify({session:SID,events:unsent}); unsent=[];
   if(beacon&&navigator.sendBeacon) navigator.sendBeacon(API+'/trace',new Blob([body],{type:'application/json'}));
   else fetch(API+'/trace',{method:'POST',headers:{'content-type':'application/json'},body,keepalive:true}).catch(()=>{}); }
 setInterval(()=>ship(false),4000); addEventListener('pagehide',()=>ship(true));
 function show(cls,text){ const d=document.createElement('div'); d.className='m '+cls; d.textContent=text; $('#list').append(d); $('#list').scrollTop=1e9; return d; }
 function log(cls,text,extra){ rec({t:Date.now()-T0,kind:cls,text,...extra}); return show(cls,text); }
+/* a user turn, with its photos' thumbnails: in the log line and under the orb */
+function thumbs(el,urls){ if(!urls?.length) return; const p=document.createElement('div'); p.className='ph';
+  urls.forEach(u=>{ if(!u) return; const im=document.createElement('img'); im.src=u; im.alt='photo'; p.append(im); }); el.append(p); }
+function showU(text,urls){ const d=show('u',text); thumbs(d,urls); return d; }
+function youSaid(text,urls){ const y=$('#you'); y.textContent=text?'“'+text+'”':''; thumbs(y,urls); }
 function logTool(fc,result,ms){ const err=!!result?.error, body=JSON.stringify(result,null,1)||'';
   rec({t:Date.now()-T0,kind:'tool',name:fc.name,args:fc.args||{},ms,bytes:body.length,error:result?.error||null,result});
   const d=document.createElement('div'); d.className='m tool'+(err?' err':'');
   d.innerHTML='<span class="ms">'+ms+' ms</span><b>'+(err?'✗':'⚙')+' '+esc(fc.name)+'</b>('+esc(JSON.stringify(fc.args||{}))+')'+(err?'<br>'+esc(result.error):'')+'<pre>'+esc(body.slice(0,20000))+'</pre>';
   d.onclick=()=>d.classList.toggle('open'); $('#list').append(d);
-  const ts=trace.filter(x=>x.kind==='tool'); $('#logStats').textContent=ts.length+' tool calls · '+ts.filter(x=>x.error).length+' errors'; }
+  const ts=trace.filter(x=>x.kind==='tool'); $('#logStats').textContent=(build?build+' · ':'')+ts.length+' tool calls · '+ts.filter(x=>x.error).length+' errors'; }
 /* info: the tools, as the dot sees them, and the inbox it reads */
 const KIND={act:'needs a yes',private:'private mode',display:'shows on screen',slow:'sub-agent'};
 $('#infoBtn').onclick=async()=>{ $('#info').classList.add('on'); const box=$('#about'); box.textContent='…';
   const i=await fetch(API+'/info').then(r=>r.json()).catch(()=>null); if(!i||i.error){ box.textContent='Couldn’t load the tool list.'; return; }
   box.innerHTML=(i.inbox?'<h3>Inbox</h3><div class="tl">Forward mail to <a href="mailto:'+esc(i.inbox)+'">'+esc(i.inbox)+'</a> and your dot can read it.</div>':'')+
     '<h3>Tools · '+i.tools.length+'</h3>'+i.tools.map(t=>'<div class="tl"><b>'+esc(label(t.name))+'</b>'+(KIND[t.kind]?'<i>'+KIND[t.kind]+'</i>':'')+'<div>'+esc(t.description)+'</div></div>').join('')+
-    '<h3>Modes</h3><div class="tl">Tap the dot to talk; type to get answers in text.'+(CFG.modes?' '+(demo?'Demo mode hides amounts and contact details.':'Private mode shows real numbers.'):'')+'</div>'; };
+    '<h3>Modes</h3><div class="tl">Tap the dot to talk; type to get answers in text.'+(CFG.modes?' '+(demo?'Demo mode hides amounts and contact details.':'Private mode shows real numbers.'):'')+'</div>'+
+    (i.version?'<h3>Build</h3><div class="tl">'+(i.version.semver?'<b>'+esc(i.version.semver)+'</b> · ':'')+esc(i.version.short)+' · '+esc(String(i.version.built).slice(0,10))+'</div>':''); };
 $('#infoClose').onclick=()=>$('#info').classList.remove('on');
 $('#logBtn').onclick=()=>$('#log').classList.add('on'); $('#logClose').onclick=()=>$('#log').classList.remove('on');
 $('#copyLog').onclick=()=>navigator.clipboard?.writeText(JSON.stringify(trace,null,1)).then(()=>toast('Copied as JSON')).catch(()=>toast('Copy blocked'));
@@ -361,11 +402,15 @@ async function start({mic=true,quiet=false}={}){ wantMic=mic; micOpen=false;
   const dot=$('#dot'); dot.classList.add('connecting'); status('waking…'); ensureOut(); outCtx.resume();
   quietStart=quiet; wakingCue=quiet||!mic?Promise.resolve():playCue('waking');
   try{
-    const tk=await (await fetch(API+'/token?safe='+(demo?1:0))).json(); if(tk.error) throw new Error(tk.error);
-    ws=new WebSocket('wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContentConstrained?access_token='+encodeURIComponent(tk.token));
-    ws.onopen=()=>ws.send(JSON.stringify({setup:{model:tk.model,...(handle?{sessionResumption:{handle}}:{})}}));
-    ws.onmessage=async ev=>onMsg(JSON.parse(typeof ev.data==='string'?ev.data:await ev.data.text()));
-    ws.onclose=e=>{ const was=!!ws; ws=null; ready=false; dot.classList.remove('on','connecting'); stopMic(); wake?.release?.(); wake=null; micOpen=false;
+    let res=await fetch(API+'/token?safe='+(demo?1:0));
+    if(res.status===403&&!demo){ refusedPrivate(); res=await fetch(API+'/token?safe=1'); }
+    const tk=await res.json(); if(tk.error) throw new Error(tk.error);
+    const sock=new WebSocket('wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContentConstrained?access_token='+encodeURIComponent(tk.token));
+    ws=sock;
+    ws.onopen=()=>sock.send(JSON.stringify({setup:{model:tk.model,...(handle?{sessionResumption:{handle}}:{})}}));
+    ws.onmessage=async ev=>{ if(ws===sock) onMsg(JSON.parse(typeof ev.data==='string'?ev.data:await ev.data.text())); };
+    /* an old socket closing late (after a mode switch or a reconnect) must not take the new one with it */
+    ws.onclose=e=>{ if(ws&&ws!==sock) return; const was=!!ws; ws=null; ready=false; dot.classList.remove('on','connecting'); stopMic(); wake?.release?.(); wake=null; micOpen=false;
       status(e.code===1000?'tap to talk':'disconnected · tap to reconnect'); if(e.code!==1000&&was){ log('t','session closed '+e.code+(e.reason?' · '+e.reason:'')); ear.error(); emit('error'); playCue('lost'); } };
   }catch(e){ dot.classList.remove('connecting'); status('tap to talk'); toast('Couldn’t wake '+CFG.name+': '+e.message); ws=null; ear.error(); wakingCue.then(()=>playCue('unreachable')); }
 }
@@ -376,6 +421,7 @@ async function onMsg(m){
     const mic=micStream?true:wantMic?await startMic().catch(e=>{ toast('Mic: '+e.message); return false; }):false;
     if(mic&&!quietStart){ await wakingCue; await playCue('ready'); }  // only then open the mic, so it doesn't hear itself
     micOpen=true; if(!mic&&wantMic) status('typing only'); emit('ready');
+    if(resumed&&resumed.sid===SID&&!resumed.told){ resumed.told=true; greeted=SID; context(resumed.lines); }
     if(pending.length) photosToLive('');
     else if(CFG.greeting&&greeted!==SID&&!quietStart){ greeted=SID; emit('greet'); note(CFG.greeting); }
     return; }
@@ -384,7 +430,7 @@ async function onMsg(m){
   if(m.toolCall) return tools(m.toolCall.functionCalls||[]);
   const sc=m.serverContent; if(!sc) return;
   if(sc.interrupted){ flush(); finishSay(); }
-  if(sc.inputTranscription?.text){ youText+=sc.inputTranscription.text; $('#you').textContent='“'+youText.trim()+'”'; }
+  if(sc.inputTranscription?.text){ youText+=sc.inputTranscription.text; youSaid(youText.trim()); }
   for(const p of sc.modelTurn?.parts||[]) if(p.inlineData?.data) play(p.inlineData.data);
   if(sc.outputTranscription?.text){ if(youText){ log('u',youText.trim()); youText=''; } sayText+=sc.outputTranscription.text; $('#say').textContent=sayText; }
   if(sc.turnComplete&&sayText) finishSay();
@@ -439,9 +485,10 @@ $('#dot').onclick=async()=>{ if(ws&&ready&&!micStream){ wantMic=true; await star
 let textOk=true;
 async function ask(t){ const g=gen; if(ws){ stop(); }
   const ps=pending; pending=[]; drawPending();
-  if(ps.length) logPhotos(ps,t); else show('u',t); $('#you').textContent='“'+t+'”'; $('#say').textContent='…'; status('thinking…');
-  let res; try{ res=await fetch(API+'/chat',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({text:t,session:SID,safe:demo,...(ps.length?{images:ps.map(p=>({mimeType:p.mimeType,data:p.data}))}:{})})}); }
+  const urls=ps.map(p=>p.thumb); showU(t,urls); youSaid(t,urls); $('#say').textContent='…'; status('thinking…');
+  let res; try{ res=await fetch(API+'/chat',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({text:t,session:SID,safe:demo,...(ps.length?{images:ps.map(p=>({mimeType:p.mimeType,data:p.data,thumb:p.thumb}))}:{})})}); }
   catch(e){ $('#say').textContent=''; toast('Couldn’t reach '+CFG.name+': '+e.message); status('tap to talk'); return true; }
+  if(res.status===403&&!demo){ refusedPrivate(); pending=ps.concat(pending); drawPending(); $('#list').lastChild?.remove(); return ask(t); }
   if(res.status===404){ pending=ps.concat(pending); drawPending(); textOk=false; $('#say').textContent=''; $('#list').lastChild?.remove(); return false; }
   const rd=res.body.getReader(), dec=new TextDecoder(); let buf='', chips=[];
   for(;;){ const {value,done}=await rd.read(); if(g!==gen) return true; if(done) break; buf+=dec.decode(value,{stream:true});
@@ -456,12 +503,15 @@ async function ask(t){ const g=gen; if(ws){ stop(); }
 let pending=[];
 async function shrink(file){ const img=await new Promise((ok,no)=>{ const i=new Image(); i.onload=()=>ok(i); i.onerror=()=>no(new Error('can’t read that photo')); i.src=URL.createObjectURL(file); });
   const k=Math.min(1,1280/Math.max(img.naturalWidth,img.naturalHeight)), c=document.createElement('canvas'); c.width=Math.round(img.naturalWidth*k); c.height=Math.round(img.naturalHeight*k);
-  c.getContext('2d').drawImage(img,0,0,c.width,c.height); URL.revokeObjectURL(img.src); const url=c.toDataURL('image/jpeg',.85);
-  return {mimeType:'image/jpeg',data:url.split(',')[1],url}; }
+  c.getContext('2d').drawImage(img,0,0,c.width,c.height); const url=c.toDataURL('image/jpeg',.85);
+  const q=Math.min(1,192/Math.max(img.naturalWidth,img.naturalHeight)), s=document.createElement('canvas'); s.width=Math.round(img.naturalWidth*q); s.height=Math.round(img.naturalHeight*q);
+  s.getContext('2d').drawImage(img,0,0,s.width,s.height); URL.revokeObjectURL(img.src);
+  return {mimeType:'image/jpeg',data:url.split(',')[1],url,thumb:s.toDataURL('image/jpeg',.7)}; }
 function drawPending(){ const box=$('#pending'); box.textContent='';
   pending.forEach((p,i)=>{ const s=document.createElement('span'); s.innerHTML='<img alt="photo to send"><b aria-label="remove">×</b>'; s.querySelector('img').src=p.url;
     s.querySelector('b').onclick=()=>{ pending.splice(i,1); drawPending(); }; box.append(s); }); }
-function logPhotos(ps,text){ const d=log('u',(text?text+' ':'')+'['+ps.length+' photo'+(ps.length>1?'s':'')+']'); ps.forEach(p=>{ const im=document.createElement('img'); im.src=p.url; d.append(im); }); }
+/* a voice turn's photos: traced with their thumbnails (the server keeps them in the thread), drawn in the log and under the orb */
+function logPhotos(ps,text){ const urls=ps.map(p=>p.thumb); rec({t:Date.now()-T0,kind:'u',text,photos:urls}); showU(text,urls); youSaid(text,urls); }
 /* to the Live session: the photos inline in one turn with what to do with them
    (a realtimeInput video frame isn't seen by a typed turn; checked against Gemini Live) */
 function photosToLive(text){ const ps=pending; pending=[]; drawPending(); if(!ps.length) return;
@@ -472,17 +522,48 @@ $('#photo').onchange=async e=>{ const files=[...e.target.files].slice(0,4-pendin
   for(const f of files){ try{ pending.push(await shrink(f)); }catch(err){ toast(err.message); } }
   drawPending(); if(ws&&ready&&pending.length) photosToLive($('#type').value.trim()||''); };
 
-/* a fresh session: the old one's trace ships and ends; everything on screen and in the Live session goes */
-function fresh(){ log('t','cleared'); ship(false); gen++; busy=0; stop(); handle=null; apps.close();
-  SID=newSid(); T0=Date.now(); trace=[]; seq=0; markStart();
+/* switching session: the old one's trace ships; everything on screen and in the Live session goes */
+function reset(sid){ ship(false); gen++; busy=0; stop(); handle=null; apps.close(); resumed=null;
+  SID=sid||newSid(); T0=Date.now(); trace=[]; seq=0;
   for(const s of ['#list','#links','#chips','#you','#say','#logStats']) $(s).textContent='';
-  $('#log').classList.remove('on'); status('tap to talk'); toast('Fresh start.'); }
-$('#new').onclick=fresh;
+  markStart(); $('#log').classList.remove('on'); status('tap to talk'); }
+function fresh(){ log('t','cleared'); reset(); toast('Fresh start.'); }
+
+/* threads: this user's past sessions, kept by the server. A tap resumes one: its transcript comes back, the session id
+   carries on (so typed turns keep their history), and a Live session started in it gets the last lines as context. */
+let resumed=null, thOpen=false, thFrom=null;
+const ago=ms=>{ const s=(Date.now()-ms)/1000; return s<60?'just now':s<3600?Math.round(s/60)+' min ago':s<86400?Math.round(s/3600)+' h ago':s<604800?Math.round(s/86400)+' d ago':new Date(ms).toLocaleDateString(); };
+function drawer(on){ thOpen=on; $('#threads').classList.toggle('on',on); $('#scrim').classList.toggle('on',on); $('#threads').inert=!on;
+  document.querySelectorAll('.app>header,.app>main,.app>footer').forEach(e=>{ e.inert=on; }); }
+async function openThreads(){ if(thOpen) return; thFrom=document.activeElement; drawer(true); history.pushState({dotThreads:1},''); $('#newThread').focus?.();
+  const box=$('#threadList'); box.textContent='…';
+  const r=await fetch(API+'/threads?safe='+(demo?1:0)).then(x=>x.json()).catch(()=>null); if(!thOpen) return;
+  if(!r||r.error){ box.textContent=r?.error==='threads need a login'?'Threads need a login.':'Couldn’t load your threads.'; return; }
+  box.textContent=r.threads.length?'':'No past threads yet.';
+  for(const t of r.threads){ const b=document.createElement('button'); b.className='th'+(t.id===SID?' cur':''); b.dataset.id=t.id;
+    b.innerHTML='<span>'+esc(t.first)+'</span><i>'+(t.id===SID?'this thread · ':'')+esc(ago(t.at))+'</i>';
+    b.onclick=()=>{ closeThreads(); resume(t.id); }; box.append(b); } }
+function closeThreads(){ if(!thOpen) return; drawer(false); thFrom?.focus?.(); if(history.state?.dotThreads) history.back(); }
+addEventListener('popstate',()=>{ if(thOpen&&!history.state?.dotThreads){ drawer(false); thFrom?.focus?.(); } });  /* back, swipe-back */
+addEventListener('keydown',e=>{ if(e.key==='Escape'&&thOpen) closeThreads(); });
+let swipeX=null; $('#threads').addEventListener('touchstart',e=>{ swipeX=e.touches[0].clientX; },{passive:true});
+$('#threads').addEventListener('touchend',e=>{ if(swipeX!==null&&swipeX-e.changedTouches[0].clientX>60) closeThreads(); swipeX=null; });
+$('#threadsBtn').onclick=openThreads; $('#threadsClose').onclick=closeThreads; $('#scrim').onclick=closeThreads;
+$('#newThread').onclick=()=>{ closeThreads(); fresh(); };
+async function resume(id){ if(id===SID) return;
+  const r=await fetch(API+'/threads/'+id+'?safe='+(demo?1:0)).then(x=>x.json()).catch(()=>null); if(!r||r.error||!Array.isArray(r.lines)){ toast('Couldn’t open that thread.'); return; }
+  reset(id); resumed={sid:id,lines:r.lines,told:false};
+  for(const l of r.lines){ if(l.k==='u') showU(l.text,l.photos); else show(l.k==='d'?'d':'t',l.text); }
+  const u=r.lines.filter(l=>l.k==='u').at(-1), d=r.lines.filter(l=>l.k==='d').at(-1);
+  if(u) youSaid(u.text,u.photos); if(d) $('#say').textContent=d.text; toast('Back in that thread.'); }
+/* the resumed thread's last lines, into the Live context without asking for a reply */
+function context(lines){ const said=lines.filter(l=>l.k!=='t').slice(-12).map(l=>(l.k==='u'?CFG.user:'You')+': '+(l.photos?.length?'[photo] ':'')+l.text.slice(0,300)).join('\n');
+  if(said) ws?.send(JSON.stringify({clientContent:{turns:[{role:'user',parts:[{text:'[note from the app, not from '+CFG.user+'] This picks up an earlier conversation. It went:\n'+said}]}],turnComplete:false}})); }
 $('#type').onkeydown=async e=>{ if(e.key!=='Enter'||(!e.target.value.trim()&&!pending.length)) return; const t=e.target.value.trim(); e.target.value='';
   if(/^\/(clear|new)$/i.test(t)) return fresh();
   if(textOk&&await ask(t)) return;
   if(!ws){ await start({mic:false}); await new Promise(r=>{ const i=setInterval(()=>{ if(ready||!ws){ clearInterval(i); r(); } },100); }); }
-  if(!ws) return; flush(); if(pending.length) return photosToLive(t); log('u',t); $('#you').textContent='“'+t+'”'; sayText=''; $('#say').textContent='';
+  if(!ws) return; flush(); if(pending.length) return photosToLive(t); log('u',t); youSaid(t); sayText=''; $('#say').textContent='';
   ws.send(JSON.stringify({clientContent:{turns:[{role:'user',parts:[{text:t}]}],turnComplete:true}})); };
 
 /* apps: views over the chat. The page underneath keeps running; the pill below is the orb, shrunk. */
@@ -497,7 +578,7 @@ const closeApp=()=>apps.close();
 window.dotApps={open:openApp,close:closeApp,current:apps.current};
 $('#pill').onclick=closeApp;
 $('#links').addEventListener('click',e=>{ const a=e.target.closest?.('[data-app]'); if(a){ e.preventDefault(); openApp(a.dataset.app); } });
-if(CFG.version) $('#ver').onclick=()=>navigator.clipboard?.writeText(CFG.version.commit).then(()=>toast('Copied '+CFG.version.short)).catch(()=>toast('Copy blocked'));
+if(CFG.version) $('#ver').onclick=()=>navigator.clipboard?.writeText((CFG.version.semver?CFG.version.semver+' ':'')+CFG.version.commit).then(()=>toast('Copied '+build)).catch(()=>toast('Copy blocked'));
 
 /* installable: the worker comes from installRoutes() */
 let installEv=null;

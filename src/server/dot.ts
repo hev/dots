@@ -59,9 +59,20 @@ export type Dot = {
   /** One tool call through the whole policy: kinds, logins, receipts, redaction. Every surface goes through this. */
   invoke(name: string, args: Record<string, unknown>, ctx: Ctx, exec?: Exec): Promise<{ status: number; body: unknown }>;
   persona(demo: boolean, surface: string): Promise<string>;
-  /** Writes trace lines through the configured sink, secrets stripped. */
-  trace(session: string, events: ClientEvent[]): Promise<void>;
+  /** Writes trace lines through the configured sink, secrets stripped. With `who`, the turns are also kept as that user's thread (see threads below). */
+  trace(session: string, events: ClientEvent[], who?: string | null): Promise<void>;
 };
+
+/** A thread in the screen's drawer: the session id, its first line and when it was last used (ms). */
+export type ThreadSummary = { id: string; first: string; at: number };
+/** One kept line of a thread: what the user said (with photo thumbnails) or the dot answered, or a card or link that went up. */
+export type ThreadLine = { k: "u" | "d" | "t"; text: string; ts: number; photos?: string[] };
+
+const THREAD_TTL = 30 * 24 * 3600;
+const THREADS_KEPT = 50;
+const LINES_KEPT = 300;
+const THUMB = /^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/=]+$/;
+const thumbOk = (t: unknown): t is string => typeof t === "string" && t.length <= 80_000 && THUMB.test(t);
 
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
@@ -171,7 +182,7 @@ export async function defineDot(opts: DotOptions): Promise<Dot> {
     for (const i of x as Image[])
       if (!i || !/^image\/(jpeg|png|webp)$/.test(String(i.mimeType)) || typeof i.data !== "string" || i.data.length > 7_000_000 || !/^[A-Za-z0-9+/=]+$/.test(i.data.slice(0, 200)))
         return "a photo has to be a JPEG, PNG or WebP under 5 MB";
-    return (x as Image[]).map((i) => ({ mimeType: i.mimeType, data: i.data }));
+    return (x as Image[]).map((i) => ({ mimeType: i.mimeType, data: i.data, ...(thumbOk(i.thumb) ? { thumb: i.thumb } : {}) }));
   }
 
   /** What the screen's info pane shows: the tools, in the persona's own words, and the inbox. */
@@ -197,11 +208,57 @@ export async function defineDot(opts: DotOptions): Promise<Dot> {
     const a = (await req.json().catch(() => ({}))) as { session?: string; events?: ClientEvent[] };
     const session = String(a.session ?? "");
     if (!SESSION.test(session)) return json({ error: "bad session" }, 400);
-    await writeTrace(session, a.events ?? []);
+    await writeTrace(session, Array.isArray(a.events) ? a.events : [], await who(req));
     return json({ ok: true });
   }
 
-  async function writeTrace(session: string, events: ClientEvent[]) {
+  // Threads: the screen's sessions, kept per user in the store so the drawer can
+  // list them and a tap resumes one. Only the turns are kept (what was said, the
+  // photos' thumbnails, cards and links), secrets stripped as in traces. A thread
+  // belongs to whoever wrote it first; nobody else can read or add to it.
+  const threadKey = (session: string) => `thread:${session}`;
+  const indexKey = (w: string) => `threads:${w}`;
+
+  async function keepThread(session: string, events: ClientEvent[], w: string) {
+    const lines: ThreadLine[] = [];
+    for (const e of events.slice(0, 200)) {
+      const ts = typeof e.ts === "number" ? e.ts : Date.parse(String(e.ts ?? "")) || Date.now();
+      const text = r.safe(String(e.text ?? "").slice(0, 4000));
+      if (e.kind === "u" || e.kind === "d") {
+        const photos = (Array.isArray(e.photos) ? e.photos : []).filter(thumbOk).slice(0, 4);
+        if (text || photos.length) lines.push({ k: e.kind, text, ts, ...(photos.length ? { photos } : {}) });
+      } else if (e.kind === "t" && text && (e.card || e.url)) lines.push({ k: "t", text, ts });
+    }
+    if (!lines.length) return;
+    const t = (await store.get(threadKey(session))) as { who: string; lines: ThreadLine[] } | undefined;
+    if (t && t.who !== w) return;
+    await store.put(threadKey(session), { who: w, lines: [...(t?.lines ?? []), ...lines].slice(-LINES_KEPT) }, THREAD_TTL);
+    const index = ((await store.get(indexKey(w))) as ThreadSummary[] | undefined) ?? [];
+    const was = index.find((x) => x.id === session);
+    const said = lines.find((l) => l.k === "u");
+    const first = was?.first || (said ? said.text.split("\n")[0].slice(0, 120) || "📷 photo" : "");
+    const next = [{ id: session, first, at: Date.now() }, ...index.filter((x) => x.id !== session)].slice(0, THREADS_KEPT);
+    await store.put(indexKey(w), next, THREAD_TTL);
+  }
+
+  /** Read back in the mode the screen is in (`?safe=0` for private, as for the token): demo masks amounts, so a private thread can't show its numbers in a demo. */
+  async function threads(req: Request, id?: string) {
+    const w = await who(req);
+    if (w === null) return json({ error: "threads need a login" }, 403);
+    const demo = new URL(req.url).searchParams.get("safe") !== "0";
+    if (!demo && !allowed(w)) return json({ error: "private mode needs an allowed login" }, 403);
+    const say = (s: string) => (demo ? r.demo(s) : s);
+    if (!id) {
+      const index = ((await store.get(indexKey(w))) as ThreadSummary[] | undefined) ?? [];
+      return json({ threads: index.filter((x) => x.first).sort((a, b) => b.at - a.at).map((x) => ({ ...x, first: say(x.first) })) });
+    }
+    const t = (await store.get(threadKey(id))) as { who: string; lines: ThreadLine[] } | undefined;
+    if (!t || t.who !== w) return json({ error: "no such thread" }, 404);
+    return json({ id, lines: t.lines.map((l) => ({ ...l, text: say(l.text) })) });
+  }
+
+  async function writeTrace(session: string, events: ClientEvent[], w?: string | null) {
+    if (w) await keepThread(session, events, w);
     // Secrets and emails are stripped; amounts are kept, as in hev dot.
     // The build is added after redaction, which would take a full commit for a key.
     const v = opts.version;
@@ -226,11 +283,14 @@ export async function defineDot(opts: DotOptions): Promise<Dot> {
       if (req.method === "POST" && route === "/trace") return trace(req);
       if (req.method === "POST" && route === "/chat") return talk(req, exec);
       if (req.method === "GET" && route === "/info") return info();
+      if (req.method === "GET" && route === "/threads") return threads(req);
+      const t = route.match(/^\/threads\/([0-9a-f-]{8,40})$/);
+      if (req.method === "GET" && t) return threads(req, t[1]);
       const m = route.match(/^\/job\/([0-9a-f]{8})$/);
       if (req.method === "GET" && m) return job(m[1]);
       return json({ error: "no" }, 404);
     },
   };
-  const text = opts.chat ? chat({ dot, model: opts.chat, store, surface: "text" }) : null;
+  const text = opts.chat ? chat({ dot, model: opts.chat, store, surface: "text", threads: true }) : null;
   return dot;
 }

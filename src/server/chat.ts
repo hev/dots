@@ -7,8 +7,8 @@ import type { Dot } from "./dot.ts";
 import type { ClientEvent } from "./traces.ts";
 import type { Ctx, Store, ToolDecl } from "./types.ts";
 
-/** A photo attached to a typed turn: base64 data, no data: prefix. */
-export type Image = { mimeType: string; data: string };
+/** A photo attached to a typed turn: base64 data, no data: prefix. `thumb`, a small data: URL from the screen, is kept for the thread. */
+export type Image = { mimeType: string; data: string; thumb?: string };
 
 export type Call = { id: string; name: string; args: Record<string, unknown> };
 
@@ -33,6 +33,8 @@ export type ChatOptions = {
   maxSteps?: number;
   /** History kept per session, in messages. */
   keep?: number;
+  /** Keep this surface's sessions as the user's threads on the screen (see dot.trace). The dot's own screen chat does. */
+  threads?: boolean;
 };
 
 export type TurnHooks = {
@@ -70,8 +72,9 @@ export function chat(o: ChatOptions) {
       ctx = { ...ctx, turn: crypto.randomUUID() };
       const key = keyOf(ctx);
       const history = (((await o.store.get(key)) as Msg[] | undefined) ?? []).slice(-keep);
-      const trace: ClientEvent[] = [{ kind: "u", id: `${Date.now()}u`, ts: Date.now(), text: images.length ? `[${images.length} photo${images.length > 1 ? "s" : ""}] ${text}` : text }];
-      history.push({ role: "user", text, ...(images.length ? { images } : {}) });
+      const thumbs = images.flatMap((i) => (i.thumb ? [i.thumb] : []));
+      const trace: ClientEvent[] = [{ kind: "u", id: `${Date.now()}u`, ts: Date.now(), text, ...(images.length ? { photos: thumbs.length === images.length ? thumbs : images.map(() => "") } : {}) }];
+      history.push({ role: "user", text, ...(images.length ? { images: images.map(({ mimeType, data }) => ({ mimeType, data })) } : {}) });
       const system = await o.dot.persona(ctx.demo, o.surface);
 
       let reply = "";
@@ -107,7 +110,7 @@ export function chat(o: ChatOptions) {
       let seen = 0;
       const kept = history.slice(-keep).reverse().map((m) => (m.role === "user" && m.images ? (++seen > 2 ? { role: "user" as const, text: `[a photo she shared earlier] ${m.text}` } : m) : m)).reverse();
       await o.store.put(key, kept, 7 * 24 * 3600);
-      await o.dot.trace(ctx.session, trace);
+      await o.dot.trace(ctx.session, trace, o.threads ? ctx.who : null);
       return reply;
     },
 

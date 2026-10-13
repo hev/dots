@@ -15,6 +15,11 @@ export type ClientEvent = {
   result?: unknown;
   error?: unknown;
   ms?: number;
+  /** On a `u` event: thumbnails of the photos sent with it, as small data: URLs. Kept for the thread, not the trace. */
+  photos?: string[];
+  /** On a `t` event: the card or link that went up. */
+  card?: unknown;
+  url?: string;
 };
 
 export const SESSION = /^[0-9a-f-]{8,40}$/;
@@ -28,7 +33,7 @@ export function toLines(session: string, events: ClientEvent[]): TraceLine[] {
       id,
       ts: e.ts ?? null,
       role: e.kind === "u" ? "user" : e.kind === "d" || e.kind === "tool" ? "assistant" : "event",
-      text: String(e.text ?? "").slice(0, 8000),
+      text: (e.photos?.length ? `[${e.photos.length} photo${e.photos.length > 1 ? "s" : ""}] ` : "") + String(e.text ?? "").slice(0, 8000),
       model: e.model ?? null,
     };
     if (e.kind === "start") line.text = SESSION_START;

@@ -16,7 +16,7 @@
 //   between issuing the receipt and accepting it. Default 4s: shorter than a
 //   spoken read-back plus a spoken yes, longer than a model calling straight back.
 // And once `refusals` confirmed calls of one tool in one session have been
-// refused, the next refused one stops the tool for that session: the model is told to stop, say plainly it didn't
+// refused (a run clears the count), the next refused one stops the tool for that session: the model is told to stop, say plainly it didn't
 // go through, and not retry. A new session starts clean.
 
 import type { Store } from "./types.ts";
@@ -113,5 +113,7 @@ export async function gate(
     return issue(AGAIN);
   }
   await store.delete(k);
+  // A yes that matched shows the flow works; a looping model never gets here.
+  if (refused) await store.delete(rk);
   return { run: true };
 }
