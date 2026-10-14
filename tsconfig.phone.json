@@ -1,0 +1,9 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "types": [],
+    "lib": ["es2023", "dom", "dom.iterable"]
+  },
+  "include": ["src/phone/index.ts"],
+  "exclude": ["test", "node_modules"]
+}
