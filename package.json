@@ -12,6 +12,7 @@
     "./server": "./src/server/index.ts",
     "./gemini-live": "./src/gemini-live/index.ts",
     "./install": "./src/install/index.ts",
+    "./phone": "./src/phone/index.ts",
     "./slack": "./src/slack/index.ts",
     "./client": "./src/client/index.ts",
     "./maps": "./src/maps/index.ts",
