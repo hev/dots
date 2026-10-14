@@ -410,3 +410,24 @@ blindly retry a dial. Stream tokens expire with the call and cannot reconnect.
 Protocol references: [Twilio request signatures](https://www.twilio.com/docs/usage/security),
 [Media Streams messages](https://www.twilio.com/docs/voice/media-streams/websocket-messages),
 and [Gemini Live WebSockets](https://ai.google.dev/gemini-api/docs/live-api/get-started-websocket).
+
+### Phone runtime boundary
+
+`src/phone/core.ts` owns fetch-based Twilio REST/webhook handling, policy and the
+Gemini protocol. `audio.ts` owns typed-array audio conversion. `transport.ts`
+defines `PhoneSocket`; `index.ts` is the public facade. None imports Node modules,
+`ws`, an HTTP server, or Workers APIs. `npm run check` also compiles this dependency
+graph with web platform libraries and **no Node types** (`tsconfig.phone.json`).
+
+Implement the transport in your host adapter: Node may use `ws` and an HTTP
+server; Cloudflare may use Worker upgrades and a Durable Object. Those APIs stay
+outside the core. `connectGemini`, `fetch`, and `schedule` can be supplied by that
+adapter. No tunnel or deployment provider is built into the phone package.
+
+A Durable Object can own the single coordinator and its sockets. Preserve its
+in-memory call state and timer execution throughout an active call; hibernation
+or eviction requires host-owned persistence/recovery before accepting another
+dial. The core does not implement Durable Object storage, alarms or hibernation.
+A plain stateless Worker instantiated per request cannot enforce the one-call
+lock. The web-only type check establishes the API boundary; it is not a deployed
+Cloudflare acceptance test. Route and deployment choices remain host-owned.

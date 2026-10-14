@@ -24,7 +24,7 @@
   },
   "scripts": {
     "test": "node --test test/*.test.ts",
-    "check": "tsc --noEmit"
+    "check": "tsc --noEmit && tsc -p tsconfig.phone.json"
   },
   "devDependencies": {
     "typescript": "^5.9.0",
