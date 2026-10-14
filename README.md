@@ -343,3 +343,70 @@ one JSON line, `{"passed", "version", "checks"}`.
   Playwright must be resolvable (`NODE_PATH` or a global install).
 - `scripts/uat live <base-url>` is read-only: `/api/info` must report
   `UAT_COMMIT`, and the screen must serve with that commit's tag.
+
+## Outbound phone calls
+
+`@hevmind/dots/phone` dials with Twilio REST, serves `<Connect><Stream>` TwiML,
+and bridges Media Streams to server-side Gemini Live. The server enforces an
+exact E.164 number allowlist, one active call, a length cap, synchronous answering
+machine detection, signed callbacks/upgrades, and a single-use stream token
+bound to the call SID. Only `AnsweredBy=human` connects; voicemail, fax and unknown
+results hang up. Live is off by default, so `dial()` returns a dry-run summary
+without contacting either service.
+
+```ts
+import { phone } from "@hevmind/dots/phone";
+import type { PhoneSocket } from "@hevmind/dots/phone";
+
+// Provided by your host's WebSocket adapter; resolves when the connection opens.
+declare function connectSocket(url: string): Promise<PhoneSocket>;
+const calls = phone({
+  live: false, // Enable only on the server after wiring the host below.
+  accountSid: process.env.TWILIO_ACCOUNT_SID!,
+  authToken: process.env.TWILIO_AUTH_TOKEN!,
+  from: "+14155550100",
+  allowlist: ["+14155550101"],
+  publicUrl: "https://phone.example.com",
+  maxSeconds: 120,
+  gemini: { apiKey: process.env.GEMINI_API_KEY!, model: "models/your-live-model" },
+  persona: "You are my assistant. Keep phone replies brief.",
+  connectGemini: connectSocket,
+  onError: error => console.error(error),
+});
+
+// Call from a trusted server action, after the dot's normal read-back/yes policy.
+const result = await calls.dial("+14155550101");
+// Your fetch router delegates POST /phone/answer and /phone/status:
+const route = (request: Request) => calls.handle(request);
+
+// In the host's GET /phone/stream upgrade handler:
+async function acceptStream(request: Request, accept: () => PhoneSocket) {
+  if (!await calls.authorizeStream(request)) return new Response("Forbidden", { status: 403 });
+  const socket = accept();
+  await calls.stream(request, socket);
+}
+```
+
+The host owns HTTP/WebSocket upgrade mechanics and implements `PhoneSocket`
+(`send`, `close`, `onMessage`, `onClose`, `onError`); messages arrive as decoded
+JSON strings. Register stream handlers before delivering buffered start frames.
+Keep Twilio/Gemini credentials on the server. Use the exact externally visible
+HTTPS URL when constructing requests behind a proxy, preserving query strings
+and every form field for signature verification. The public origin must use
+standard HTTPS port 443. Serve the matching WSS path with a valid certificate.
+Gemini setup stays server-owned and exposes no tools; its key is never sent to
+Twilio or the client. Audio is raw mu-law at 8 kHz on Twilio, PCM16 at 16 kHz into
+Gemini, and PCM16 at 24 kHz out, converted incrementally across frame boundaries.
+Interrupted Gemini output clears Twilio's playback buffer.
+
+Run one long-lived coordinator per caller and route all callbacks and streams to
+it. The in-memory lock is per adapter instance; do not create one per request or
+run multiple replicas for the same caller. Twilio's `TimeLimit` also enforces the
+cap if the host stops. A lost dial response or failed hangup keeps the slot locked
+until a signed terminal callback or successful `hangup()` reconciles it; do not
+blindly retry a dial. Stream tokens expire with the call and cannot reconnect.
+`npm test` exercises these paths with fake REST and sockets; it makes no real calls.
+
+Protocol references: [Twilio request signatures](https://www.twilio.com/docs/usage/security),
+[Media Streams messages](https://www.twilio.com/docs/voice/media-streams/websocket-messages),
+and [Gemini Live WebSockets](https://ai.google.dev/gemini-api/docs/live-api/get-started-websocket).
