@@ -135,10 +135,12 @@ export function phone(o: PhoneOptions) {
   async function stream(request: Request, socket: PhoneSocket) {
     if (!await authorizeStream(request)) { socket.close(); throw new Error("Unauthorized phone stream"); }
     let call: Call | undefined, streamSid = "", ready = false, stopped = false;
+    let cancelSetup: (() => void) | undefined;
+    const queued: string[] = []; let queuedBytes = 0;
     const up = inputAudio(); let down = outputAudio();
     const cancelStart = schedule(() => { socket.close(); }, 5000);
     const end = () => {
-      if (stopped) return; stopped = true; cancelStart();
+      if (stopped) return; stopped = true; cancelStart(); cancelSetup?.();
       socket.close();
       if (call) { call.gemini?.close(); void hangup(call).catch(report); }
     };
@@ -153,14 +155,21 @@ export function phone(o: PhoneOptions) {
         const current = active, start = message.start;
         if (call || !current?.answered || current.consumed || start?.customParameters?.token !== current.token || start.callSid !== current.sid || !start.streamSid || start.mediaFormat?.encoding !== "audio/x-mulaw" || start.mediaFormat?.sampleRate !== 8000 || start.mediaFormat?.channels !== 1) throw new Error("Invalid phone stream");
         call = current; current.consumed = true; current.socket = socket; streamSid = start.streamSid; cancelStart();
+        cancelSetup = schedule(end, 10000);
         const gemini = await o.connectGemini(`wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${encodeURIComponent(o.gemini.apiKey)}`);
         if (stopped || active !== current) { gemini.close(); return; }
         current.gemini = gemini;
         gemini.onClose(end); gemini.onError(end);
         gemini.onMessage(raw => {
           try {
+            if (stopped) return;
+            if (raw.length > 1_000_000) throw new Error("Oversize Gemini frame");
             const response = JSON.parse(raw);
-            if (response.setupComplete) ready = true;
+            if (response.setupComplete) {
+              ready = true; cancelSetup?.();
+              for (const frame of queued) gemini.send(frame);
+              queued.length = 0; queuedBytes = 0;
+            }
             if (response.error || response.goAway) { end(); return; }
             if (response.serverContent?.interrupted) { down = outputAudio(); socket.send(JSON.stringify({ event: "clear", streamSid })); }
             for (const part of response.serverContent?.modelTurn?.parts ?? []) {
@@ -175,7 +184,16 @@ export function phone(o: PhoneOptions) {
         gemini.send(JSON.stringify({ setup: liveSetup(o.gemini, setup) }));
       } else if (message.event === "media") {
         if (!call || message.streamSid !== streamSid) throw new Error("Media before authenticated start");
-        if (ready && message.media?.track === "inbound") call.gemini!.send(JSON.stringify({ realtimeInput: { audio: { mimeType: "audio/pcm;rate=16000", data: encode64(up(decode64(message.media.payload))) } } }));
+        if (message.media?.track === "inbound") {
+          const pcm = up(decode64(message.media.payload));
+          const frame = JSON.stringify({ realtimeInput: { audio: { mimeType: "audio/pcm;rate=16000", data: encode64(pcm) } } });
+          if (ready) call.gemini!.send(frame);
+          else {
+            queuedBytes += pcm.length;
+            if (queuedBytes > 64000) throw new Error("Gemini input queue exceeded two seconds");
+            queued.push(frame);
+          }
+        }
       } else if (message.event === "stop") end();
     }
     return { close: end };

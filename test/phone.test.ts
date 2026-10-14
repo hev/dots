@@ -134,3 +134,32 @@ test("G.711 known samples and chunk boundaries preserve audio lengths", () => {
   const pieces = [...down(pcm.slice(0, 5)), ...down(pcm.slice(5, 17)), ...down(pcm.slice(17))];
   assert.deepEqual(Uint8Array.from(pieces), whole); assert.equal(whole.length, 160);
 });
+test("early audio waits for Gemini setup; setup timeout ends the call", async () => {
+  const h = harness(); await h.adapter.dial("+14155550101"); const token = await h.answer();
+  const socket = new Socket(); await h.adapter.stream(await h.upgrade(), socket); socket.emit(start(token));
+  socket.emit({ event: "media", streamSid: "MStest", media: { track: "inbound", payload: "/w==" } });
+  await tick(); assert.equal(h.gemini.sent.length, 1);
+  h.gemini.emit({ setupComplete: {} }); assert.equal(h.gemini.sent.length, 2);
+  assert.equal(h.timers.at(-1)!.canceled, true);
+  socket.error(); await tick(); assert.equal(h.adapter.busy(), false);
+  const stalled = harness(); await stalled.adapter.dial("+14155550101"); const token2 = await stalled.answer();
+  const socket2 = new Socket(); await stalled.adapter.stream(await stalled.upgrade(), socket2); socket2.emit(start(token2)); await tick();
+  assert.equal(stalled.timers.at(-1)!.ms, 10000); stalled.timers.at(-1)!.fn(); await tick();
+  assert.equal(socket2.closed, true); assert.equal(stalled.adapter.busy(), false);
+});
+test("failed hangup preserves reservation; successful retry releases it", async () => {
+  let fail = true;
+  const h = harness({ fetch: async (url) => {
+    if (String(url).includes("/CAtest.json") && fail) return new Response(null, { status: 503 });
+    return Response.json({ sid: "CAtest" });
+  } });
+  await h.adapter.dial("+14155550101");
+  await assert.rejects(h.adapter.hangup(), /503/); assert.equal(h.adapter.busy(), true);
+  fail = false; await h.adapter.hangup(); assert.equal(h.adapter.busy(), false);
+});
+test("malformed Gemini output hangs up and does not send audio", async () => {
+  const h = harness(); await h.adapter.dial("+14155550101"); const token = await h.answer();
+  const socket = new Socket(); await h.adapter.stream(await h.upgrade(), socket); socket.emit(start(token)); await tick();
+  h.gemini.emit({ serverContent: { modelTurn: { parts: [{ inlineData: { mimeType: "audio/wav", data: "AA==" } }] } } });
+  await tick(); assert.equal(socket.sent.length, 0); assert.equal(h.adapter.busy(), false);
+});
