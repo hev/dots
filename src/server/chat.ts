@@ -15,7 +15,7 @@ export type Call = { id: string; name: string; args: Record<string, unknown> };
 export type Msg =
   | { role: "user"; text: string; images?: Image[] }
   /** `raw` is the provider's own turn, sent back as-is (Gemini 3 needs its thought signatures returned). */
-  | { role: "model"; text?: string; calls?: Call[]; raw?: unknown }
+  | { role: "model"; text?: string; calls?: Call[]; raw?: unknown; model?: string }
   | { role: "tool"; results: { id: string; name: string; result: unknown }[] };
 
 /** A text model with function calling. */
@@ -71,7 +71,8 @@ export function chat(o: ChatOptions) {
       // Act receipts need the yes in a later turn than the read-back.
       ctx = { ...ctx, turn: crypto.randomUUID() };
       const key = keyOf(ctx);
-      const history = (((await o.store.get(key)) as Msg[] | undefined) ?? []).slice(-keep);
+      const history = (((await o.store.get(key)) as Msg[] | undefined) ?? []).slice(-keep).map((m): Msg =>
+        m.role === "model" && m.model !== o.model.name ? { ...m, raw: undefined } : m);
       const thumbs = images.flatMap((i) => (i.thumb ? [i.thumb] : []));
       const trace: ClientEvent[] = [{ kind: "u", id: `${Date.now()}u`, ts: Date.now(), text, ...(images.length ? { photos: thumbs.length === images.length ? thumbs : images.map(() => "") } : {}) }];
       history.push({ role: "user", text, ...(images.length ? { images: images.map(({ mimeType, data }) => ({ mimeType, data })) } : {}) });
@@ -80,7 +81,7 @@ export function chat(o: ChatOptions) {
       let reply = "";
       for (let step = 0; step < maxSteps; step++) {
         const out = await o.model.turn({ system, history, tools: o.dot.registry.decls });
-        history.push({ role: "model", text: out.text, calls: out.calls, raw: out.raw });
+        history.push({ role: "model", text: out.text, calls: out.calls, raw: out.raw, model: o.model.name });
         if (!out.calls?.length) {
           reply = out.text ?? "";
           break;

@@ -25,6 +25,7 @@ const dot = await defineDot({
   voice: { name: "fixture", mint: async () => ({ error: "fixture has no voice" }) },
   tools: [local([defineTool({ name: "today", description: "Today's plan.", run: () => ({ plan: "fixture" }) })]), appTools({ notes: "a scratch view" })],
   chat: model,
+  chatModels: { fixture: model, alternate: { ...model, name: "alternate-fixture" } },
   identity: async () => "uat@example.com",
   logins: ["uat@example.com"],
   version,

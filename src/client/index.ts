@@ -135,7 +135,7 @@ export function screen(o: ScreenOptions): string {
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 ${o.install ? installHead(o.install) : ""}
 <title>${esc(o.name)}</title>
 ${o.design?.head ?? ""}
@@ -147,19 +147,20 @@ ${o.design?.decor ? `<div id="decor" aria-hidden="true">${o.design.decor}</div>`
   <header><button id="threadsBtn" class="ic" aria-label="threads" aria-haspopup="dialog" aria-controls="threads" title="your threads">☰</button><div class="wm">${wm}${o.subtitle ? `<span class="sfx">${esc(o.subtitle)}</span>` : ""}</div>
     <button id="install" hidden>install</button><button id="mode" class="ic"></button><button id="infoBtn" class="ic" aria-label="info" title="info">i</button></header>
   <main>
-    <button id="dot" aria-label="talk"><span id="halo"></span>${o.orb ? `<img id="core" class="art" src="${esc(o.orb)}" alt="">` : `<span id="core"></span>`}</button>
-    <div id="status">tap to talk</div>
+    <button id="dot" aria-label="Start voice"><span class="voiceLabel">Voice</span><span id="halo"></span>${o.orb ? `<img id="core" class="art" src="${esc(o.orb)}" alt="">` : `<span id="core"></span>`}</button>
+    <div id="status" role="status">Ready to chat</div>
+    <section id="conversation" role="log" aria-label="Conversation" tabindex="0" aria-live="polite"></section>
     <div id="you"></div><div id="say"></div>
     <div id="chips"></div><div id="links"></div>
   </main>
-  <footer><div id="pending"></div><div class="row"><button id="attach" aria-label="add a photo" title="add a photo">📷</button><input id="photo" type="file" accept="image/*" multiple hidden><input id="type" placeholder="or type" autocomplete="off"></div></footer>
-  <section id="log"><div class="bar"><span id="logStats"></span><button id="copyLog">copy</button><button id="logClose">close</button></div><div id="list"></div></section>
-  <section id="info"><div class="bar"><span>${esc(o.name)}</span><button id="infoClose">close</button></div><div id="infoBody"><button id="logBtn" class="row"><b>log</b><i>this session's turns and tool calls</i></button><div id="about"></div>${v ? `<h3>Build</h3><button id="ver" class="row" title="${esc(v.short)} · copy the build" data-sha="${esc(v.short)}">${esc(semver(v.semver) ? v.semver! : v.short)} · ${esc(v.built.slice(0, 10))}</button>` : ""}</div></section>
+  <footer><label id="modelLabel">Model <select id="model" aria-label="Model" disabled><option>Loading models…</option></select></label><div id="pending"></div><div class="row"><button id="attach" aria-label="add a photo" title="add a photo">📷</button><input id="photo" type="file" accept="image/*" multiple hidden><textarea id="type" aria-label="Message" placeholder="Message" rows="2"></textarea><button id="send" aria-label="Send message">Send</button></div></footer>
+  <section id="log" role="dialog" aria-modal="true" aria-label="Session log"><div class="bar"><span id="logStats"></span><button id="copyLog">copy</button><button id="logClose">close</button></div><div id="list"></div></section>
+  <section id="info" role="dialog" aria-modal="true" aria-label="Info"><div class="bar"><span>${esc(o.name)}</span><button id="infoClose">close</button></div><div id="infoBody"><button id="logBtn" class="row"><b>log</b><i>this session's turns and tool calls</i></button><div id="about"></div>${v ? `<h3>Build</h3><button id="ver" class="row" title="${esc(v.short)} · copy the build" data-sha="${esc(v.short)}">${esc(semver(v.semver) ? v.semver! : v.short)} · ${esc(v.built.slice(0, 10))}</button>` : ""}</div></section>
   <div id="scrim"></div>
   <section id="threads" role="dialog" aria-modal="true" aria-label="threads" inert><div class="bar"><span>threads</span><button id="newThread">new thread</button><button id="threadsClose" aria-label="close threads">close</button></div><div id="threadList"></div></section>
   <section id="apps" aria-label="app"></section>
   <button id="pill" aria-label="back to chat" hidden><i id="pillDot"></i><span id="pillText"></span></button>
-  <div id="toast"></div>
+  <div id="toast" role="alert"></div>
 </div>
 <script>const CFG=${json};
 ${SCRIPT}${o.design?.script ? `\n;(()=>{${o.design.script}\n})();` : ""}</script>
@@ -280,6 +281,21 @@ header,main,footer{position:relative;z-index:1}
 #pill.on #pillDot{background:var(--sig);box-shadow:0 0 8px 2px color-mix(in srgb,var(--sig) 60%,transparent)}
 #pill.connecting #pillDot{animation:pulse 1s ease-in-out infinite}
 #pillText{font:500 12px var(--mono);color:var(--muted);max-width:42vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+.app{max-width:960px}
+main{justify-content:flex-start;align-items:stretch;gap:8px;padding-top:8px}
+#dot{width:84px;height:44px;align-self:flex-end;flex:none}
+.voiceLabel{position:absolute;right:48px;top:13px;font-size:13px}#dot #halo{left:auto;width:44px}#dot #core{left:auto;width:20px;right:12px}#dot #core.art{width:44px;right:0}
+#core{inset:12px}#core.art{inset:0;width:44px;height:44px}
+#conversation{flex:1;min-height:0;overflow:auto;overflow-wrap:anywhere;padding:8px}
+#conversation .m{white-space:pre-wrap;padding:12px;border:0;border-radius:12px;margin-bottom:8px;background:var(--card)}
+#conversation .u{margin-left:12%;color:var(--ink)}
+#conversation .d{margin-right:12%}
+#you,#say{display:none}
+#type{resize:vertical;min-height:64px;max-height:30dvh;border-radius:12px;min-width:0}
+#send,select{min-height:44px}#modelLabel{font-size:13px}
+button:focus-visible,textarea:focus-visible,select:focus-visible{outline:2px solid var(--sig);outline-offset:2px}
+@media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}}
 `;
 
 // Plain browser JS. CFG comes from the server. Kept in step with hev dot's
@@ -318,12 +334,12 @@ function ship(beacon){ if(!unsent.length) return; const body=JSON.stringify({ses
   if(beacon&&navigator.sendBeacon) navigator.sendBeacon(API+'/trace',new Blob([body],{type:'application/json'}));
   else fetch(API+'/trace',{method:'POST',headers:{'content-type':'application/json'},body,keepalive:true}).catch(()=>{}); }
 setInterval(()=>ship(false),4000); addEventListener('pagehide',()=>ship(true));
-function show(cls,text){ const d=document.createElement('div'); d.className='m '+cls; d.textContent=text; $('#list').append(d); $('#list').scrollTop=1e9; return d; }
+function show(cls,text){ const d=document.createElement('div'); d.className='m '+cls; d.textContent=text; $('#list').append(d); if(cls==='u'||cls==='d'){ const c=document.createElement('div'); c.className='m '+cls; c.setAttribute('aria-label',cls==='u'?'You':'Assistant'); c.textContent=text; $('#conversation').append(c); $('#conversation').scrollTop=1e9; } $('#list').scrollTop=1e9; return d; }
 function log(cls,text,extra){ rec({t:Date.now()-T0,kind:cls,text,...extra}); return show(cls,text); }
 /* a user turn, with its photos' thumbnails: in the log line and under the orb */
-function thumbs(el,urls){ if(!urls?.length) return; const p=document.createElement('div'); p.className='ph';
+function thumbs(el,urls){ if(!el||!urls?.length) return; const p=document.createElement('div'); p.className='ph';
   urls.forEach(u=>{ if(!u) return; const im=document.createElement('img'); im.src=u; im.alt='photo'; p.append(im); }); el.append(p); }
-function showU(text,urls){ const d=show('u',text); thumbs(d,urls); return d; }
+function showU(text,urls){ const d=show('u',text); thumbs(d,urls); thumbs($('#conversation').lastChild,urls); return d; }
 function youSaid(text,urls){ const y=$('#you'); y.textContent=text?'“'+text+'”':''; thumbs(y,urls); }
 function logTool(fc,result,ms){ const err=!!result?.error, body=JSON.stringify(result,null,1)||'';
   rec({t:Date.now()-T0,kind:'tool',name:fc.name,args:fc.args||{},ms,bytes:body.length,error:result?.error||null,result});
@@ -335,7 +351,7 @@ function logTool(fc,result,ms){ const err=!!result?.error, body=JSON.stringify(r
 const KIND={act:'needs a yes',private:'private mode',display:'shows on screen',slow:'sub-agent'};
 /* info and the log: panes over the chat. Each open pushes a history entry, so back (and Escape) closes the top one;
    the log opens from inside info, so closing it lands back in info. */
-const pane=(id,on)=>{ $(id).classList.toggle('on',on); };
+const pane=(id,on)=>{ $(id).classList.toggle('on',on); const modal=isOn('#info')||isOn('#log'); document.querySelectorAll('.app>header,.app>main,.app>footer').forEach(e=>{ e.inert=modal; }); $('#info').inert=isOn('#log'); };
 const isOn=id=>$(id).classList.contains('on');
 function openLog(){ if(isOn('#log')) return; pane('#log',true); history.pushState({dotLog:1},''); $('#logClose').focus?.(); }
 function closeLog(){ if(!isOn('#log')) return; pane('#log',false); $('#logBtn').focus?.(); if(history.state?.dotLog) history.back(); }
@@ -350,6 +366,16 @@ $('#infoBtn').onclick=async()=>{ if(isOn('#info')) return; pane('#info',true); h
     '<h3>Tools · '+i.tools.length+'</h3>'+i.tools.map(t=>'<div class="tl"><b>'+esc(label(t.name))+'</b>'+(KIND[t.kind]?'<i>'+KIND[t.kind]+'</i>':'')+'<div>'+esc(t.description)+'</div></div>').join('')+
     '<h3>Modes</h3><div class="tl">Tap the dot to talk; type to get answers in text.'+(CFG.modes?' '+(demo?'Demo mode hides amounts and contact details.':'Private mode shows real numbers.'):'')+'</div>'+
     (i.version&&!CFG.version?'<h3>Build</h3><div class="tl">'+(i.version.semver?'<b>'+esc(i.version.semver)+'</b> · ':'')+esc(i.version.short)+' · '+esc(String(i.version.built).slice(0,10))+'</div>':''); };
+addEventListener('keydown',e=>{
+  if(e.key!=='Tab') return;
+  const panel=isOn('#log')?$('#log'):isOn('#info')?$('#info'):$('#threads').classList.contains('on')?$('#threads'):null;
+  if(!panel) return;
+  const items=[...panel.querySelectorAll('button,a[href],input,textarea,select,[tabindex="0"]')].filter(el=>!el.disabled&&el.getClientRects().length);
+  if(!items.length) return;
+  const first=items[0], last=items.at(-1);
+  if(e.shiftKey&&document.activeElement===first){ e.preventDefault(); last.focus(); }
+  else if(!e.shiftKey&&document.activeElement===last){ e.preventDefault(); first.focus(); }
+});
 $('#infoClose').onclick=closeInfo; $('#logBtn').onclick=openLog; $('#logClose').onclick=closeLog;
 $('#copyLog').onclick=()=>navigator.clipboard?.writeText(JSON.stringify(trace,null,1)).then(()=>toast('Copied as JSON')).catch(()=>toast('Copy blocked'));
 
@@ -364,7 +390,8 @@ function flush(){ playing.forEach(s=>{ try{s.stop();}catch{} }); playing=[]; out
 
 /* sound: earcons for tool calls, and spoken cues in the dot's voice when the dot serves them */
 let sfx; const sfxCtx=()=>sfx||(sfx=new AudioContext());
-function tone(notes,{type='sine',gain=.05,gap=0}={}){ const c=sfxCtx(); c.resume(); let t=c.currentTime+.01;
+let voiceEnabled=false;
+function tone(notes,{type='sine',gain=.05,gap=0}={}){ if(!voiceEnabled) return; const c=sfxCtx(); c.resume(); let t=c.currentTime+.01;
   for(const [f,d] of notes){ const o=c.createOscillator(), g=c.createGain(); o.type=type; o.frequency.value=f;
     g.gain.setValueAtTime(0,t); g.gain.linearRampToValueAtTime(gain,t+.01); g.gain.exponentialRampToValueAtTime(.0001,t+d);
     o.connect(g); g.connect(c.destination); o.start(t); o.stop(t+d+.02); t+=d+gap; } }
@@ -380,9 +407,9 @@ const emit=(n,detail)=>dispatchEvent(new CustomEvent('dot:'+n,{detail}));
 const speakingNow=()=>lvl(outLevel)>.02;
 setInterval(()=>{ if(ws&&busy>0&&!speakingNow()) ear.working(); },1600);
 const cueBuf={}, lastTake={};
-async function loadCue(kind){ if(!CFG.cues) return; try{ const n=Math.floor(Math.random()*6), r=await fetch(API+'/cue?kind='+kind+'&n='+(n===lastTake[kind]?n+1:n)); if(!r.ok) return;
+async function loadCue(kind){ if(!CFG.cues||!voiceEnabled) return; try{ const n=Math.floor(Math.random()*6), r=await fetch(API+'/cue?kind='+kind+'&n='+(n===lastTake[kind]?n+1:n)); if(!r.ok||!voiceEnabled) return;
   lastTake[kind]=n; cueBuf[kind]=await sfxCtx().decodeAudioData(await r.arrayBuffer()); }catch{} }
-['waking','ready','bye','lost','reconnect','unreachable'].forEach(loadCue);
+
 /* resolves when the cue has finished, so the mic can wait for it and not hear the dot */
 function playCue(kind){ const b=cueBuf[kind]; loadCue(kind); if(!b) return Promise.resolve();
   const c=sfxCtx(); c.resume(); const s=c.createBufferSource(); s.buffer=b; s.connect(c.destination); s.start();
@@ -395,6 +422,7 @@ const WORKLET='class P extends AudioWorkletProcessor{constructor(){super();this.
 async function startMic(){
   if(!isSecureContext||!navigator.mediaDevices){ toast('Voice needs HTTPS. Type for now.'); return false; }
   micStream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true,channelCount:1}});
+  if(!voiceEnabled){ stopMic(); return false; }
   inCtx=new AudioContext({sampleRate:16000}); await inCtx.audioWorklet.addModule(URL.createObjectURL(new Blob([WORKLET],{type:'text/javascript'})));
   const src=inCtx.createMediaStreamSource(micStream), node=new AudioWorkletNode(inCtx,'p'); inLevel=inCtx.createAnalyser(); inLevel.fftSize=256;
   src.connect(inLevel); src.connect(node);
@@ -416,13 +444,14 @@ const status=t=>$('#status').textContent=t;
 function note(text){ ws?.send(JSON.stringify({clientContent:{turns:[{role:'user',parts:[{text:'[note from the app, not from '+CFG.user+'] '+text}]}],turnComplete:true}})); }
 
 /* the Live session: the token carries the persona and tools, locked server-side */
-async function start({mic=true,quiet=false}={}){ wantMic=mic; micOpen=false;
+let voiceEpoch=0;
+async function start({mic=true,quiet=false}={}){ const epoch=voiceEpoch; wantMic=mic; micOpen=false;
   const dot=$('#dot'); dot.classList.add('connecting'); status('waking…'); ensureOut(); outCtx.resume();
   quietStart=quiet; wakingCue=quiet||!mic?Promise.resolve():playCue('waking');
   try{
     let res=await fetch(API+'/token?safe='+(demo?1:0));
     if(res.status===403&&!demo){ refusedPrivate(); res=await fetch(API+'/token?safe=1'); }
-    const tk=await res.json(); if(tk.error) throw new Error(tk.error);
+    const tk=await res.json(); if(epoch!==voiceEpoch||!voiceEnabled) return; if(tk.error) throw new Error(tk.error);
     const sock=new WebSocket('wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContentConstrained?access_token='+encodeURIComponent(tk.token));
     ws=sock;
     ws.onopen=()=>sock.send(JSON.stringify({setup:{model:tk.model,...(handle?{sessionResumption:{handle}}:{})}}));
@@ -430,11 +459,11 @@ async function start({mic=true,quiet=false}={}){ wantMic=mic; micOpen=false;
     /* an old socket closing late (after a mode switch or a reconnect) must not take the new one with it */
     ws.onclose=e=>{ if(ws&&ws!==sock) return; const was=!!ws; ws=null; ready=false; dot.classList.remove('on','connecting'); stopMic(); wake?.release?.(); wake=null; micOpen=false;
       status(e.code===1000?'tap to talk':'disconnected · tap to reconnect'); if(e.code!==1000&&was){ log('t','session closed '+e.code+(e.reason?' · '+e.reason:'')); ear.error(); emit('error'); playCue('lost'); } };
-  }catch(e){ dot.classList.remove('connecting'); status('tap to talk'); toast('Couldn’t wake '+CFG.name+': '+e.message); ws=null; ear.error(); wakingCue.then(()=>playCue('unreachable')); }
+  }catch(e){ dot.classList.remove('connecting'); status('Ready to chat'); toast('Couldn’t wake '+CFG.name+': '+e.message); ws=null; ear.error(); wakingCue.then(()=>playCue('unreachable')); }
 }
-function stop({bye=false}={}){ if(ws){ const w=ws; ws=null; w.close(1000); if(bye){ playCue('bye'); emit('bye'); } } micOpen=false; flush(); }
+function stop({bye=false}={}){ voiceEpoch++; stopMic(); ready=false; $('#dot').setAttribute('aria-label','Start voice'); $('#dot').classList.remove('on','connecting'); wake?.release?.(); wake=null; if(ws){ const w=ws; ws=null; w.close(1000); if(bye){ playCue('bye'); emit('bye'); } } micOpen=false; flush(); }
 async function onMsg(m){
-  if(m.setupComplete){ ready=true; $('#dot').classList.remove('connecting'); $('#dot').classList.add('on');
+  if(m.setupComplete){ $('#dot').setAttribute('aria-label','Stop voice'); ready=true; $('#dot').classList.remove('connecting'); $('#dot').classList.add('on');
     wake=await navigator.wakeLock?.request('screen').catch(()=>null);
     const mic=micStream?true:wantMic?await startMic().catch(e=>{ toast('Mic: '+e.message); return false; }):false;
     if(mic&&!quietStart){ await wakingCue; await playCue('ready'); }  // only then open the mic, so it doesn't hear itself
@@ -496,26 +525,26 @@ function awaitJob(fc,id){ const t0=Date.now(), g=gen; busy++;
   setTimeout(tick,3000); }
 
 const goFull=()=>{ if(!document.fullscreenElement&&!matchMedia('(display-mode: standalone), (display-mode: fullscreen)').matches) document.documentElement.requestFullscreen?.({navigationUI:'hide'}).catch(()=>{}); };
-$('#dot').onclick=async()=>{ if(ws&&ready&&!micStream){ wantMic=true; await startMic().catch(e=>{ toast('Mic: '+e.message); }); }
-  else if(ws){ stop({bye:true}); status('tap to talk'); } else { goFull(); $('#you').textContent=''; $('#say').textContent=''; start(); } };
+$('#dot').onclick=async()=>{ if($('#dot').classList.contains('connecting')){ stop(); voiceEnabled=false; status('Ready to chat'); return; } voiceEnabled=true; if(ws&&ready&&!micStream){ wantMic=true; await startMic().catch(e=>{ toast('Mic: '+e.message); }); }
+  else if(ws){ stop({bye:true}); status('Ready to chat'); } else { goFull(); $('#you').textContent=''; $('#say').textContent=''; start(); } };
 /* text mode: a typed question gets a typed answer, from the server's chat loop.
    Voice stops, so nothing talks over the page. The server traces these turns itself. */
-let textOk=true;
-async function ask(t){ const g=gen; if(ws){ stop(); }
+
+async function ask(t){ voiceEnabled=false; stop(); sfx?.close?.(); sfx=null; const g=gen;
   const ps=pending; pending=[]; drawPending();
   const urls=ps.map(p=>p.thumb); showU(t,urls); youSaid(t,urls); $('#say').textContent='…'; status('thinking…');
-  let res; try{ res=await fetch(API+'/chat',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({text:t,session:SID,safe:demo,...(ps.length?{images:ps.map(p=>({mimeType:p.mimeType,data:p.data,thumb:p.thumb}))}:{})})}); }
-  catch(e){ $('#say').textContent=''; toast('Couldn’t reach '+CFG.name+': '+e.message); status('tap to talk'); return true; }
+  let res; try{ res=await fetch(API+'/chat',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({text:t,session:SID,safe:demo,...(selectedModel?{model:selectedModel}:{}),...(ps.length?{images:ps.map(p=>({mimeType:p.mimeType,data:p.data,thumb:p.thumb}))}:{})})}); }
+  catch(e){ throw new Error('Couldn’t reach '+CFG.name+': '+e.message); }
   if(res.status===403&&!demo){ refusedPrivate(); pending=ps.concat(pending); drawPending(); $('#list').lastChild?.remove(); return ask(t); }
-  if(res.status===404){ pending=ps.concat(pending); drawPending(); textOk=false; $('#say').textContent=''; $('#list').lastChild?.remove(); return false; }
-  const rd=res.body.getReader(), dec=new TextDecoder(); let buf='', chips=[];
+  if(!res.ok){ pending=ps.concat(pending); drawPending(); throw new Error(res.status===404?'Text chat is unavailable. Voice is available only with Start voice.':'Chat failed ('+res.status+'). Try again.'); }
+  const rd=res.body.getReader(), dec=new TextDecoder(); let buf='', chips=[], replied=false;
   for(;;){ const {value,done}=await rd.read(); if(g!==gen) return true; if(done) break; buf+=dec.decode(value,{stream:true});
     let i; while((i=buf.indexOf('\n'))>=0){ const line=buf.slice(0,i); buf=buf.slice(i+1); if(!line.trim()) continue; const m=JSON.parse(line);
       if(m.slow){ status('asking a sub-agent…'); const c=document.createElement('span'); c.className='chip'; c.textContent='⟳ '+label(m.slow); $('#chips').append(c); chips.push(c); }
       if(m.display){ if(m.display.card) showCard(m.display.card); else if(m.display.url) showLink(m.display.url,m.display.label); else if(m.display.app) openApp(m.display.app); else if(m.display.close_app) closeApp(); }
-      if(m.error){ $('#say').textContent=''; show('t','✗ '+m.error); toast(m.error); }
-      if(m.reply){ $('#say').textContent=m.reply; show('d',m.reply); } } }
-  chips.forEach(c=>c.remove()); status('tap to talk'); return true; }
+      if(m.error){ chips.forEach(c=>c.remove()); throw new Error(m.error); }
+      if(typeof m.reply==='string'){ replied=true; $('#say').textContent=m.reply; show('d',m.reply); } } }
+  chips.forEach(c=>c.remove()); if(!replied) throw new Error('The reply was interrupted. Try again.'); status('Ready to chat'); return true; }
 
 /* photos: from the camera roll or the camera, shrunk on the phone, then sent to the voice session or with the next typed turn */
 let pending=[];
@@ -543,8 +572,8 @@ $('#photo').onchange=async e=>{ const files=[...e.target.files].slice(0,4-pendin
 /* switching session: the old one's trace ships; everything on screen and in the Live session goes */
 function reset(sid){ ship(false); gen++; busy=0; stop(); handle=null; apps.close(); resumed=null;
   SID=sid||newSid(); T0=Date.now(); trace=[]; seq=0;
-  for(const s of ['#list','#links','#chips','#you','#say','#logStats']) $(s).textContent='';
-  markStart(); closeLog(); status('tap to talk'); }
+  for(const s of ['#conversation','#list','#links','#chips','#you','#say','#logStats']) $(s).textContent='';
+  markStart(); closeLog(); status('Ready to chat'); }
 function fresh(){ log('t','cleared'); reset(); toast('Fresh start.'); }
 
 /* threads: this user's past sessions, kept by the server. A tap resumes one: its transcript comes back, the session id
@@ -577,12 +606,24 @@ async function resume(id){ if(id===SID) return;
 /* the resumed thread's last lines, into the Live context without asking for a reply */
 function context(lines){ const said=lines.filter(l=>l.k!=='t').slice(-12).map(l=>(l.k==='u'?CFG.user:'You')+': '+(l.photos?.length?'[photo] ':'')+l.text.slice(0,300)).join('\n');
   if(said) ws?.send(JSON.stringify({clientContent:{turns:[{role:'user',parts:[{text:'[note from the app, not from '+CFG.user+'] This picks up an earlier conversation. It went:\n'+said}]}],turnComplete:false}})); }
-$('#type').onkeydown=async e=>{ if(e.key!=='Enter'||(!e.target.value.trim()&&!pending.length)) return; const t=e.target.value.trim(); e.target.value='';
-  if(/^\/(clear|new)$/i.test(t)) return fresh();
-  if(textOk&&await ask(t)) return;
-  if(!ws){ await start({mic:false}); await new Promise(r=>{ const i=setInterval(()=>{ if(ready||!ws){ clearInterval(i); r(); } },100); }); }
-  if(!ws) return; flush(); if(pending.length) return photosToLive(t); log('u',t); youSaid(t); sayText=''; $('#say').textContent='';
-  ws.send(JSON.stringify({clientContent:{turns:[{role:'user',parts:[{text:t}]}],turnComplete:true}})); };
+let selectedModel='', sending=false;
+fetch(API+'/info').then(r=>{if(!r.ok) throw new Error(); return r.json();}).then(i=>{
+  const models=Array.isArray(i.models)?i.models:[];
+  const select=$('#model'); select.textContent='';
+  const fallback=document.createElement('option'); fallback.value=''; fallback.textContent=i.defaultModel||'Text unavailable'; select.append(fallback);
+  for(const m of models){ const o=document.createElement('option'); o.value=m.id; o.textContent=m.name; select.append(o); }
+  select.disabled=!models.length;
+}).catch(()=>{ $('#model').textContent=''; const o=document.createElement('option'); o.textContent='Models unavailable'; $('#model').append(o); $('#model').disabled=true; });
+$('#model').onchange=e=>{ selectedModel=e.target.value; };
+async function submit(){
+  const input=$('#type'), t=input.value.trim(); if(sending||(!t&&!pending.length)) return;
+  if(/^\/(clear|new)$/i.test(t)){ input.value=''; return fresh(); }
+  sending=true; $('#send').disabled=true; input.value='';
+  try{ await ask(t); }catch(e){ input.value=t; status('Couldn’t send message'); toast(e.message); }
+  finally{ sending=false; $('#send').disabled=false; input.focus?.(); }
+}
+$('#send').onclick=submit;
+$('#type').onkeydown=e=>{ if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing){ e.preventDefault?.(); return submit(); } };
 
 /* apps: views over the chat. The page underneath keeps running; the pill below is the orb, shrunk. */
 const inert=on=>document.querySelectorAll('.app>header,.app>main,.app>footer').forEach(e=>{ e.inert=on; });

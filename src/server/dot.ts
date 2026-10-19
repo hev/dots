@@ -26,8 +26,10 @@ export type DotOptions = {
   tools: ToolServer[];
   /** Integrations plugged in whole: their tools, routes and persona guidance. */
   packs?: Pack[];
-  /** A text model for typed turns on the screen (`POST /chat`). Without it, typing goes to the voice session. */
+  /** A text model for typed turns on the screen (`POST /chat`). Without it, typed turns report that text is unavailable. */
   chat?: ChatModel;
+  /** Server allowlist for the screen picker. Keys are public IDs, values are configured adapters. */
+  chatModels?: Record<string, ChatModel>;
   /** A thinking sub-agent the voice hands judgment questions to, as a slow tool over the dot's read tools. */
   subagent?: SubagentOptions;
   /** The address the dot reads mail from, if it has one, for the screen's info pane. */
@@ -154,8 +156,10 @@ export async function defineDot(opts: DotOptions): Promise<Dot> {
 
   /** A typed turn: the same persona, tools and policy, answered in text. Streams NDJSON: {slow}, {display}, then {reply} or {error}. */
   async function talk(req: Request, exec?: Exec) {
-    if (!text) return json({ error: "this dot has no text model" }, 404);
-    const a = (await req.json().catch(() => ({}))) as { text?: string; session?: string; safe?: boolean; images?: unknown };
+    if (!text && !Object.keys(textModels).length) return json({ error: "this dot has no text model" }, 404);
+    const a = (await req.json().catch(() => ({}))) as { text?: string; session?: string; safe?: boolean; images?: unknown; model?: string };
+    const selected = a.model === undefined ? text : (Object.hasOwn(textModels, a.model) ? textModels[a.model] : undefined);
+    if (!selected) return json({ error: "text model is unavailable" }, 400);
     const session = String(a.session ?? "");
     if (!SESSION.test(session)) return json({ error: "bad session" }, 400);
     const images = photos(a.images);
@@ -167,7 +171,7 @@ export async function defineDot(opts: DotOptions): Promise<Dot> {
     const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
     const w = writable.getWriter();
     const send = (o: unknown) => w.write(new TextEncoder().encode(JSON.stringify(o) + "\n"));
-    const done = text
+    const done = selected
       .turn(ctx, said, { onSlow: (name) => send({ slow: name }), onDisplay: (name, result) => send({ display: result, name }) }, images)
       .then((reply) => send({ reply }), (e) => send({ error: String(e).slice(0, 300) }))
       .finally(() => w.close());
@@ -190,7 +194,9 @@ export async function defineDot(opts: DotOptions): Promise<Dot> {
     return json({
       name: opts.name,
       inbox: opts.inbox ?? null,
-      text: !!opts.chat,
+      text: !!text,
+      defaultModel: defaultModel?.name ?? null,
+      models: Object.entries(opts.chatModels ?? {}).map(([id, model]) => ({ id, name: model.name })),
       version: opts.version ?? null,
       tools: tools.decls.map((d) => ({ name: d.name, kind: d.kind ?? "read", description: d.description.split(/\. (?=[A-Z])/)[0].replace(/\.$/, "") })),
     });
@@ -291,6 +297,8 @@ export async function defineDot(opts: DotOptions): Promise<Dot> {
       return json({ error: "no" }, 404);
     },
   };
-  const text = opts.chat ? chat({ dot, model: opts.chat, store, surface: "text", threads: true }) : null;
+  const defaultModel = opts.chat ?? Object.values(opts.chatModels ?? {})[0];
+  const text = defaultModel ? chat({ dot, model: defaultModel, store, surface: "text", threads: true }) : null;
+  const textModels = Object.fromEntries(Object.entries(opts.chatModels ?? {}).map(([id, model]) => [id, chat({ dot, model, store, surface: "text", threads: true })]));
   return dot;
 }

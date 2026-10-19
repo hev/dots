@@ -261,7 +261,7 @@ test("photos show as thumbnails in the user's turn, under the orb and in the log
   assert.deepEqual(imgs(turn), ["data:image/jpeg;base64,VEhVTUI="]);
   assert.deepEqual(imgs(b.$("#you")), ["data:image/jpeg;base64,VEhVTUI="]);
   assert.equal(b.$("#you").text, "“what is it”");
-  assert.equal(n.calls[0].body.images[0].thumb, "data:image/jpeg;base64,VEhVTUI=", "the thumb goes to the server for the thread");
+  assert.equal(n.calls.find(c => c.url.endsWith("/chat"))!.body.images[0].thumb, "data:image/jpeg;base64,VEhVTUI=", "the thumb goes to the server for the thread");
 });
 
 test("the threads drawer lists past threads, resumes one, and closes on back", async () => {
@@ -318,7 +318,7 @@ test("the header reads ☰, the wordmark, the mode, then a compact i; the log is
   assert.ok(at(/class="wm"/) < at(/id="mode"/) && at(/id="mode"/) < at(/id="infoBtn"/), "then the mode, then info");
   assert.match(header, /<button id="infoBtn" class="ic" aria-label="info"[^>]*>i<\/button>/);
   assert.doesNotMatch(header, /logBtn|id="ver"/, "log and the build moved into info");
-  assert.match(html, /<section id="info">.*<button id="logBtn"/, "the log opens from info");
+  assert.match(html, /<section id="info"[^>]*>.*<button id="logBtn"/, "the log opens from info");
   assert.match(html, /header \.ic\{width:40px;height:40px/, "tap targets of 40px");
 });
 
@@ -367,4 +367,39 @@ test("the log opens from info; back and Escape close it and land in info", async
   b.ctx.window.history.back();
   await b.tick();
   assert.ok(!b.$("#info").classList.contains("on"), "back closes info");
+});
+
+test("text failures retain the draft and never start voice, even with spoken cues configured", async () => {
+  for (const status of [404, 500]) {
+    sockets.length = 0;
+    let audio = 0;
+    const n = net({ "/api/chat": () => ({ status, json: { error: "unavailable" } }) });
+    const b = boot({ name: "generic", cues: true }, {
+      fetch: n.fetch, WebSocket: FakeSocket, AudioContext: class { constructor() { audio++; } },
+    });
+    b.$("#type").value = "keep my draft";
+    await b.$("#type").onkeydown({ key: "Enter" });
+    assert.equal(b.$("#type").value, "keep my draft");
+    assert.equal(sockets.length, 0);
+    assert.equal(audio, 0);
+    assert.equal(n.calls.some(c => /token|cue/.test(c.url)), false);
+  }
+});
+
+test("typing cancels an outstanding voice token request", async () => {
+  sockets.length = 0;
+  let release!: (v: any) => void;
+  const n = net({ "/api/chat": () => ({ json: { reply: "hello" } }) });
+  const b = boot({ name: "generic" }, {
+    AudioContext: FakeAudio, WebSocket: FakeSocket,
+    fetch: (url: string, init: any) => url.includes("/token")
+      ? new Promise(resolve => { release = resolve; })
+      : n.fetch(url, init),
+  });
+  await b.$("#dot").onclick();
+  b.$("#type").value = "text instead";
+  await b.$("#type").onkeydown({ key: "Enter" });
+  release({ json: async () => ({ token: "t", model: "m" }) });
+  await b.tick();
+  assert.equal(sockets.length, 0);
 });

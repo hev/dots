@@ -431,3 +431,26 @@ dial. The core does not implement Durable Object storage, alarms or hibernation.
 A plain stateless Worker instantiated per request cannot enforce the one-call
 lock. The web-only type check establishes the API boundary; it is not a deployed
 Cloudflare acceptance test. Route and deployment choices remain host-owned.
+
+## Text-first screen and model selection
+
+The shared screen opens in silent text chat. Enter sends, Shift+Enter adds a
+line, and the Send button works on mobile. Only the Voice button starts voice;
+a missing or failing text adapter never opens a microphone, audio context or
+voice connection. Display cards, links and apps remain available in text chat.
+
+Configure `chat` for a single adapter. For a picker, configure `chatModels`
+with public IDs mapped to real `ChatModel` adapters. `chat` is the default;
+without it, the first allowlisted adapter is the default. All choices use the
+same server tools, identity, redaction and act receipts. The screen obtains
+names and availability from `GET /api/info` and sends the selected ID with
+`POST /api/chat`; unknown IDs fail before model execution. Provider keys stay
+on the server. Adapter names should report verified provider model identifiers.
+Do not label an adapter as a requested model unless that provider capability has
+been verified. In particular, a consumer requesting Opus 5.5 must verify its
+provider identifier and availability in its own deployment; the framework
+supplies no invented alias or substitute provider.
+
+Existing consumers using `chat`, `screenRoutes`, display tools and act receipts
+need no configuration migration. Text chat without an adapter reports
+unavailability. Voice remains an explicit optional path.
