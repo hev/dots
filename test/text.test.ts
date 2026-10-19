@@ -92,3 +92,23 @@ test("info lists the tools and the inbox", async () => {
   assert.deepEqual(info.tools.map((t: any) => [t.name, t.kind]), [["spending", "read"], ["pay_bill", "act"], ["show_map", "display"], ["deep_think", "slow"]]);
   assert.equal(info.tools[0].description, "Spending by category");
 });
+
+test("model picker exposes only configured models and rejects unlisted IDs before execution", async () => {
+  const chosen: string[] = [];
+  const adapter = (name: string): ChatModel => ({ name, turn: async () => { chosen.push(name); return { text: name }; } });
+  const d = await defineDot({
+    name: "generic", persona: () => "", tools: [],
+    voice: { name: "none", mint: async () => ({}) },
+    chatModels: { fast: adapter("Fast"), careful: adapter("Careful") },
+  });
+  const info = await (await d.fetch(new Request("http://dot/api/info"))).json() as any;
+  assert.deepEqual(info.models, [{ id: "fast", name: "Fast" }, { id: "careful", name: "Careful" }]);
+  for (const id of ["unknown", "toString", "__proto__"]) {
+    const r = await d.fetch(new Request("http://dot/api/chat", { method: "POST", body: JSON.stringify({ text: "hi", session: SESSION, model: id }) }));
+    assert.equal(r.status, 400);
+  }
+  assert.deepEqual(chosen, []);
+  const r = await d.fetch(new Request("http://dot/api/chat", { method: "POST", body: JSON.stringify({ text: "hi", session: SESSION, model: "careful" }) }));
+  assert.match(await r.text(), /Careful/);
+  assert.deepEqual(chosen, ["Careful"]);
+});
