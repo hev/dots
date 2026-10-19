@@ -318,7 +318,7 @@ test("the header reads ☰, the wordmark, the mode, then a compact i; the log is
   assert.ok(at(/class="wm"/) < at(/id="mode"/) && at(/id="mode"/) < at(/id="infoBtn"/), "then the mode, then info");
   assert.match(header, /<button id="infoBtn" class="ic" aria-label="info"[^>]*>i<\/button>/);
   assert.doesNotMatch(header, /logBtn|id="ver"/, "log and the build moved into info");
-  assert.match(html, /<section id="info">.*<button id="logBtn"/, "the log opens from info");
+  assert.match(html, /<section id="info"[^>]*>.*<button id="logBtn"/, "the log opens from info");
   assert.match(html, /header \.ic\{width:40px;height:40px/, "tap targets of 40px");
 });
 
@@ -384,4 +384,22 @@ test("text failures retain the draft and never start voice, even with spoken cue
     assert.equal(audio, 0);
     assert.equal(n.calls.some(c => /token|cue/.test(c.url)), false);
   }
+});
+
+test("typing cancels an outstanding voice token request", async () => {
+  sockets.length = 0;
+  let release!: (v: any) => void;
+  const n = net({ "/api/chat": () => ({ json: { reply: "hello" } }) });
+  const b = boot({ name: "generic" }, {
+    AudioContext: FakeAudio, WebSocket: FakeSocket,
+    fetch: (url: string, init: any) => url.includes("/token")
+      ? new Promise(resolve => { release = resolve; })
+      : n.fetch(url, init),
+  });
+  await b.$("#dot").onclick();
+  b.$("#type").value = "text instead";
+  await b.$("#type").onkeydown({ key: "Enter" });
+  release({ json: async () => ({ token: "t", model: "m" }) });
+  await b.tick();
+  assert.equal(sockets.length, 0);
 });

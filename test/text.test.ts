@@ -112,3 +112,18 @@ test("model picker exposes only configured models and rejects unlisted IDs befor
   assert.match(await r.text(), /Careful/);
   assert.deepEqual(chosen, ["Careful"]);
 });
+
+test("switching allowlisted models keeps conversation but drops foreign provider raw data", async () => {
+  let history: any[] = [];
+  const first: ChatModel = { name: "first", turn: async () => ({ text: "first reply", raw: { signature: "provider-private" } }) };
+  const second: ChatModel = { name: "second", turn: async req => { history = req.history; return { text: "second reply" }; } };
+  const d = await defineDot({ name: "generic", persona: () => "", tools: [], voice: { name: "none", mint: async () => ({}) }, chatModels: { first, second } });
+  for (const model of ["first", "second"]) {
+    const r = await d.fetch(new Request("http://dot/api/chat", { method: "POST", body: JSON.stringify({ text: model, model, session: SESSION }) }));
+    await r.text();
+  }
+  assert.equal(history.filter(m => m.role === "user").length, 2);
+  const prior = history.find(m => m.role === "model");
+  assert.equal(prior.text, "first reply");
+  assert.equal(prior.raw, undefined);
+});

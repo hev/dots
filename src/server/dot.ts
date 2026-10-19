@@ -195,6 +195,7 @@ export async function defineDot(opts: DotOptions): Promise<Dot> {
       name: opts.name,
       inbox: opts.inbox ?? null,
       text: !!text,
+      defaultModel: defaultModel?.name ?? null,
       models: Object.entries(opts.chatModels ?? {}).map(([id, model]) => ({ id, name: model.name })),
       version: opts.version ?? null,
       tools: tools.decls.map((d) => ({ name: d.name, kind: d.kind ?? "read", description: d.description.split(/\. (?=[A-Z])/)[0].replace(/\.$/, "") })),

@@ -88,6 +88,59 @@ async function preview() {
       const html = await (await get(base + "/")).text();
       expect(html.includes(`data-sha="${commit.slice(0, 7)}"`), "no version tag in the page");
     });
+    await check("browser: silent desktop/mobile text chat, picker, errors and reload", async () => {
+      const { chromium } = await playwright();
+      const browser = await chromium.launch();
+      try {
+        for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 800 }]) {
+          const p = await browser.newPage({ viewport });
+          await p.addInitScript(() => {
+            window.__audio = { contexts: 0, media: 0, sockets: 0, playback: 0 };
+            for (const key of ["AudioContext", "webkitAudioContext", "Audio", "WebSocket"]) {
+              if (!window[key]) continue;
+              const original = window[key];
+              window[key] = new Proxy(original, { construct(target, args) {
+                window.__audio[key === "WebSocket" ? "sockets" : key === "Audio" ? "playback" : "contexts"]++;
+                return Reflect.construct(target, args);
+              } });
+            }
+            if (navigator.mediaDevices) navigator.mediaDevices.getUserMedia = async () => {
+              window.__audio.media++; throw new Error("unexpected microphone");
+            };
+            HTMLMediaElement.prototype.play = async () => { window.__audio.playback++; };
+          });
+          const requests = [];
+          p.on("request", r => requests.push(r.url()));
+          await p.goto(base + "/");
+          await p.waitForFunction(() => document.querySelector("#model")?.options.length === 3);
+          expect(await p.isVisible("#type") && await p.isVisible("#send"), "composer and send visible");
+          expect(await p.getAttribute("#type", "aria-label") === "Message", "composer has accessible name");
+          await p.fill("#type", "line one");
+          await p.press("#type", "Shift+Enter");
+          await p.type("#type", "line two");
+          expect((await p.inputValue("#type")).includes("\n"), "Shift+Enter keeps newline");
+          await p.selectOption("#model", "alternate");
+          const turn = p.waitForRequest(r => r.url().endsWith("/chat"));
+          await p.click("#send");
+          expect((await turn).postDataJSON().model === "alternate", "selected allowlisted ID sent");
+          await p.waitForFunction(() => document.querySelector("#conversation")?.textContent.includes("You said: line one"));
+          expect(await p.isVisible("#conversation .d"), "reply visible in conversation");
+          expect(await p.evaluate(() => document.documentElement.scrollWidth <= innerWidth), "no horizontal overflow");
+          await p.route("**/api/chat", r => r.fulfill({ status: 503, body: "unavailable" }));
+          await p.fill("#type", "retry me");
+          await p.click("#send");
+          await p.waitForFunction(() => document.querySelector("#type").value === "retry me" && !document.querySelector("#send").disabled);
+          expect(await p.evaluate(() => Object.values(window.__audio).every(n => n === 0)), "zero audio/media/microphone/WebSocket before opt-in");
+          expect(!requests.some(u => /\/(token|cue)(\?|$)/.test(u)), "no voice token or cue request");
+          mkdirSync(dir, { recursive: true });
+          await p.screenshot({ path: join(dir, "chat-" + viewport.width + ".png") });
+          await p.reload();
+          expect(await p.evaluate(() => Object.values(window.__audio).every(n => n === 0)), "reload stays silent");
+          await p.close();
+        }
+      } finally { await browser.close(); }
+      return "desktop/mobile text reply, multiline input, model selection, recoverable failure, reload: zero audio/media/mic/WS";
+    });
     await check("browser: apps open, back closes, session survives", async () => {
       const { chromium } = await playwright();
       const b = await chromium.launch();
