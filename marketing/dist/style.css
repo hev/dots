@@ -36,3 +36,15 @@ html{scroll-padding-top:6rem}
 @media(max-width:900px){.inbox-section{gap:35px}.case-hero{grid-template-columns:1fr 180px;gap:35px}.case-gallery{grid-template-columns:1fr}.gallery-intro p{max-width:600px}.screens{max-width:680px}.inbox-demo{padding:20px}}
 @media(max-width:700px){.inbox-section{grid-template-columns:1fr;padding-top:40px;padding-bottom:45px}.case-hero{grid-template-columns:1fr;padding-top:35px;padding-bottom:40px;gap:20px}.case-portrait{width:130px;height:130px;grid-row:1}.case-hero .eyebrow{margin-top:28px}.case-gallery{padding-top:30px;gap:20px}.screens{gap:16px}.screens img{border-radius:12px}.case-details{padding-top:35px}.case-takeaway{margin-top:35px}.inbox-demo{padding:16px}.mail-preview,.voice-preview{padding:20px}}
 .hero h1{font-size:clamp(2.65rem,4.4vw,3.8rem)}
+/* GitHub link with star count, matching hevkit.com's header. */
+.site-header .nav-links{margin-left:auto;align-items:center}.site-header .nav-toggle{order:3}
+.site-header .gh{order:2;display:inline-flex;align-items:center;gap:.4rem;margin-left:1.75rem;padding:.25rem .6rem;line-height:1.4;border:1px solid #D6D2C6;border-radius:3px;color:var(--ink-soft);text-decoration:none;white-space:nowrap;flex:0 0 auto;font-size:.8125rem;transition:border-color .15s ease,color .15s ease}
+.site-header .gh:hover{color:var(--signal-dark);border-color:var(--signal)}
+.site-header .gh svg{flex:none}
+.site-header .gh-stars{font-variant-numeric:tabular-nums}
+.site-header .gh-stars::before{content:"★ ";color:var(--signal)}
+.site-header .gh-stars[hidden]{display:none}
+.framework .actions{margin-top:28px}
+@media(max-width:640px){.site-header .gh{margin-left:auto;margin-right:.9rem}}
+@media(prefers-reduced-motion:reduce){.site-header .gh{transition:none}}
+.hero-note a,.closing p a{text-decoration:underline;text-decoration-color:var(--signal);text-underline-offset:4px}
