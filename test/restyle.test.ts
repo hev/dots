@@ -33,7 +33,7 @@ function fakeSh(files: string[], extra: Partial<Record<string, string>> = {}) {
     if (bin === "factory" && args[0] === "run") return "started\nabcdef\n";
     if (bin === "factory" && args[0] === "ls") return JSON.stringify([{ id: "abcdef", status: "running", pr: { number: 7 } }]);
     if (bin === "gh" && args[0] === "pr" && args[1] === "view")
-      return JSON.stringify({ state: "OPEN", files: files.map((path) => ({ path })), title: "German", url: "https://github.com/hev/dasha/pull/7", body: "Your dot can now look like a Bavarian beer garden.\n\nmore" });
+      return JSON.stringify({ state: "OPEN", files: files.map((path) => ({ path })), title: "German", url: "https://github.com/you/mydot/pull/7", body: "Your dot can now look like a Bavarian beer garden.\n\nmore" });
     return extra[bin] ?? "";
   };
   return { sh, calls };
@@ -41,16 +41,16 @@ function fakeSh(files: string[], extra: Partial<Record<string, string>> = {}) {
 
 test("restyle starts an agent and comes back with the PR's one line", async () => {
   const { sh, calls } = fakeSh(["theme/index.ts"]);
-  const t = restyleTools({ sh, repo: "hev/dasha", who: "Dasha", repoDir: "/x/dasha", pollMs: 1 })[0]!;
+  const t = restyleTools({ sh, repo: "you/mydot", who: "Sam", repoDir: "/x/mydot", pollMs: 1 })[0]!;
   const r = (await t.run({ change: "make it German" }, { session: "", who: null, demo: false })) as { pr: number; says: string };
   assert.equal(r.pr, 7);
   assert.equal(r.says, "Your dot can now look like a Bavarian beer garden.");
-  assert.match(calls[0]!, /^factory run hev\/dasha Restyle Dasha's dot[\s\S]*make it German/);
+  assert.match(calls[0]!, /^factory run you\/mydot Restyle Sam's dot[\s\S]*make it German/);
 });
 
 test("ship_theme refuses a change past theme/ and web/, before touching git", async () => {
   const { sh, calls } = fakeSh(["theme/index.ts", "src/dot.ts"]);
-  const t = restyleTools({ sh, repo: "hev/dasha", who: "Dasha", repoDir: "/x/dasha" })[1]!;
+  const t = restyleTools({ sh, repo: "you/mydot", who: "Sam", repoDir: "/x/mydot" })[1]!;
   assert.equal(t.kind, "act");
   const r = (await t.run({ pr: 7, confirmed: true }, { session: "", who: null, demo: false })) as { error: string; files: string[] };
   assert.match(r.error, /owner ships it/);

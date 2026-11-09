@@ -10,7 +10,7 @@ const voice: VoiceProvider = { name: "fake", mint: async (s) => ({ token: "t", p
 
 const ran: unknown[] = [];
 const tools = local([
-  defineTool({ name: "pipeline", description: "The deal pipeline. Latest stage per deal.", run: () => ({ deal: "Bristlecone", value: "$15,000", contact: "zach@bcc.example" }) }),
+  defineTool({ name: "pipeline", description: "The deal pipeline. Latest stage per deal.", run: () => ({ deal: "Larkspur", value: "$15,000", contact: "pat@larkspur.example" }) }),
   defineTool({ name: "bank", kind: "private", description: "Balances.", run: () => ({ ok: 1 }) }),
   defineTool({ name: "log_time", kind: "act", description: "Log hours.", run: (a) => (ran.push(a), { logged: a.duration }) }),
   defineTool({ name: "show_link", kind: "display", description: "Show a link.", run: () => ({ url: "https://x.example/?token=abcdef123456" }) }),
@@ -26,7 +26,7 @@ async function dot(live = true, receipts: { gapMs?: number; refusals?: number } 
     tools: [tools],
     identity: async (req) => req.headers.get("x-login"),
     logins: [ADAM],
-    redact: { codenames: { Bristlecone: "Acme" } },
+    redact: { codenames: { Larkspur: "Acme" } },
     traces,
     live,
     receipts,
@@ -207,7 +207,7 @@ test("the persona gets capabilities and the codebook from the declarations", asy
   assert.match(tok.persona, /- log_time \(action, needs a yes\): Log hours/);
   assert.match(tok.persona, /- bank \(private mode only\)/);
   assert.match(tok.persona, /- pipeline: The deal pipeline\n/);
-  assert.match(tok.persona, /Bristlecone is Acme/);
+  assert.match(tok.persona, /Larkspur is Acme/);
   assert.equal((await d.fetch(new Request("http://dot/api/token?safe=0"))).status, 403);
 });
 
@@ -219,7 +219,7 @@ test("traces land in hev dot's format, secrets stripped", async () => {
       body: JSON.stringify({
         session: SESSION,
         events: [
-          { kind: "u", id: 1, ts: 1, text: "mail zach@bcc.example" },
+          { kind: "u", id: 1, ts: 1, text: "mail pat@larkspur.example" },
           { kind: "tool", id: 2, ts: 2, name: "pipeline", args: {}, result: { value: "$5" }, ms: 40 },
         ],
       }),

@@ -17,7 +17,7 @@ test("the manifest has what Chrome needs to install", () => {
 });
 
 test("a self-signed IP origin says why it won't install", () => {
-  const p = installProblems("https://100.126.12.95:8771", manifest(opts));
+  const p = installProblems("https://100.64.0.7:8771", manifest(opts));
   assert.equal(p.length, 1);
   assert.match(p[0]!, /bare IP/);
   assert.match(installProblems("http://dot.example", manifest(opts))[0]!, /HTTPS/);

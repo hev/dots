@@ -4,6 +4,12 @@
   "private": true,
   "description": "Voice-first assistants over your own sources. Every fact from a real source; actions only after a spoken yes.",
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hev/dots.git"
+  },
+  "homepage": "https://hevdots.com/",
+  "bugs": "https://github.com/hev/dots/issues",
   "type": "module",
   "engines": {
     "node": ">=22.18"

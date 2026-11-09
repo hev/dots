@@ -109,7 +109,7 @@ export function chat(o: ChatOptions) {
       trace.push({ kind: "d", id: `${Date.now()}d`, ts: Date.now(), text: reply, model: o.model.name });
       // Photos stay with the last two messages that had them; older ones keep a mark, so the history stays small.
       let seen = 0;
-      const kept = history.slice(-keep).reverse().map((m) => (m.role === "user" && m.images ? (++seen > 2 ? { role: "user" as const, text: `[a photo she shared earlier] ${m.text}` } : m) : m)).reverse();
+      const kept = history.slice(-keep).reverse().map((m) => (m.role === "user" && m.images ? (++seen > 2 ? { role: "user" as const, text: `[a photo shared earlier] ${m.text}` } : m) : m)).reverse();
       await o.store.put(key, kept, 7 * 24 * 3600);
       await o.dot.trace(ctx.session, trace, o.threads ? ctx.who : null);
       return reply;
