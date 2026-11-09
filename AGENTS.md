@@ -1,9 +1,8 @@
 # dots
 
-The open framework behind hev dot and twc's talk mode. Design note:
-https://linear.app/hevmind/document/hevdots-design-note-1fdf19d68d31 (Linear
-project **hev dot**). This is the `dots` line: new work goes on the DOT team,
-judged against [MISSION.md](MISSION.md). Extraction is DOT-7 (was
+The open framework behind hev dot and twc's talk mode. The design note and
+issue tracker are private (Linear project **hev dot**). This is the `dots`
+line: new work goes on the DOT team, judged against [MISSION.md](MISSION.md). Extraction is DOT-7 (was
 FAC-59), the Layer adapter DOT-6 (was FAC-60).
 
 - The core is fetch-based: no Node or Workers APIs in `src/server`. State goes

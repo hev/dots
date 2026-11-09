@@ -6,7 +6,7 @@
 // merge, merges it, pulls and restarts the dot. Anything else waits for the
 // repo's owner on GitHub. Ported from hev dot's improve_self and ship_self.
 //
-// The dot's repo follows the shape in hev/dasha's AGENTS.md ("Themes"):
+// The dot's repo has this shape, described in its AGENTS.md ("Themes"):
 // theme/index.ts exports a Theme (../theme), scripts/icons.py cuts icons,
 // scripts/preview.ts renders the screen without keys, deploy/run.sh restarts it.
 

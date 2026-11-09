@@ -11,9 +11,9 @@ const ADAM = "adam@example.com";
 
 const ran: unknown[] = [];
 const tools = local([
-  defineTool({ name: "floor_status", description: "The factory floor.", run: () => ({ live: 3, client: "Bristlecone", cost: "$40" }) }),
+  defineTool({ name: "floor_status", description: "The factory floor.", run: () => ({ live: 3, client: "Larkspur", cost: "$40" }) }),
   defineTool({ name: "log_time", kind: "act", description: "Log hours.", run: (a) => (ran.push(a), { logged: a.duration }) }),
-  defineTool({ name: "show_link", kind: "display", description: "Show a link.", run: () => ({ url: "https://linear.app/x?token=abcdef123456", label: "FAC-61" }) }),
+  defineTool({ name: "show_link", kind: "display", description: "Show a link.", run: () => ({ url: "https://tracker.example/x?token=abcdef123456", label: "TASK-61" }) }),
   defineTool({ name: "deep_think", kind: "slow", description: "Ask a sub-agent.", run: async () => ({ answer: "kill it" }) }),
 ]);
 
@@ -51,7 +51,7 @@ async function setup() {
     voice: { name: "none", mint: async () => ({}) },
     tools: [tools],
     logins: [ADAM],
-    redact: { codenames: { Bristlecone: "Acme" } },
+    redact: { codenames: { Larkspur: "Acme" } },
     traces,
     live: true,
   });
@@ -132,7 +132,7 @@ test("clear in a thread forgets it and marks the trace", async () => {
 test("display tools post the link; the model hears it was shown", async () => {
   const { say, posted } = await setup();
   await say("open the link");
-  assert.equal(posted[0].text, "<https://linear.app/x?token=abcdef123456|FAC-61>");
+  assert.equal(posted[0].text, "<https://tracker.example/x?token=abcdef123456|TASK-61>");
   assert.match(posted.at(-1)!.text, /"shown":true/);
 });
 

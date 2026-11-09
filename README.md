@@ -24,6 +24,23 @@ const dot = await defineDot({
 export default { fetch: dot.fetch }; // Workers; on Node, wrap in any fetch server
 ```
 
+## Try it with no keys
+
+A fixture dot with a fake text model and no outside calls ships with the repo.
+It serves the real screen and the real routes:
+
+```sh
+git clone https://github.com/hev/dots && cd dots
+npm ci
+PORT=8787 node scripts/uat-server.ts     # prints "listening 8787"
+curl -s localhost:8787/api/info
+curl -s localhost:8787/api/chat -d '{"text":"hello","session":"0123456789abcdef"}'
+# {"reply":"You said: hello"}
+```
+
+Open http://127.0.0.1:8787/ for the screen. Voice needs a real
+`VoiceProvider` (`geminiLive` with a Gemini API key); typed chat works without one.
+
 ## The rules it enforces
 
 - **Tool kinds.** `read` (the default), `act`, `private`, `display` and `slow`.
@@ -208,7 +225,8 @@ and greets its person, as data (`screenOptions(theme)` makes the screen options)
 `@hevmind/dots/restyle` lets the person redecorate the dot out loud: `restyle`
 starts a factory session that rebuilds `theme/` and `web/` and opens a PR, and
 `ship_theme`, after a yes, ships it only if every file is under those two and
-the theme code passes `themeProblems()`. hev/dasha is the reference repo shape.
+the theme code passes `themeProblems()`. The repo shape it expects is in the
+header of `src/restyle/index.ts`.
 `memo` (from `/server`) caches slow outside calls and shares calls in flight.
 
 ## Apps
@@ -287,6 +305,75 @@ issue reports. Anything that isn't semver is ignored and the sha shows.
 ## Routes
 
 `GET /api/token`, `POST /api/tool`, `POST /api/chat`, `POST /api/trace`, `GET /api/job/<id>`, `GET /api/info`, `GET /api/threads`, `GET /api/threads/<id>`.
+The prefix is `base` (default `/api`). Who is calling comes from the dot's
+`identity` adapter, never from the body.
+
+### `POST /api/chat`
+
+One typed turn, answered by the dot's text model through the same persona,
+tools and policy as voice. The body is JSON:
+
+| field | | |
+|---|---|---|
+| `text` | string | What the user said; trimmed, cut at 4000 characters. |
+| `session` | string | Required. 8 to 40 of `0-9a-f-` (a UUID works). The conversation's history and act receipts are kept per session. |
+| `safe` | boolean | Demo mode unless exactly `false`. `false` needs an allowed login. |
+| `model` | string | Optional. An id from `chatModels`; left out, the default model answers. |
+| `images` | array | Optional. Up to four `{ mimeType, data, thumb? }`: JPEG, PNG or WebP, base64 without a `data:` prefix, under 5 MB each. |
+
+Errors before the turn starts are plain JSON with a status: 404 `{ error }` when
+the dot has no text model, 400 for a bad session, an unknown `model`, bad
+images or an empty `text`, and 403 when private mode isn't allowed.
+
+Otherwise the answer is `200`, `content-type: application/x-ndjson`: one JSON
+object per line, streamed as the turn runs, ending with exactly one `reply` or
+`error` line.
+
+```
+{"slow":"deep_think"}                                   a slow tool started; say it's working
+{"display":{"card":{"title":"…"}},"name":"show_card"}  a display tool's result: a card, a link or an app to show
+{"reply":"Here's the plan."}                            the dot's answer; the stream ends
+{"error":"…"}                                           the turn failed; the stream ends
+```
+
+The model sees only `{ shown: true }` for a display result, so the client must
+draw it. An act answers with a read-back in `reply`; the user's yes is the next
+turn in the same session, and the server checks it against the receipt. To
+forget a session, start a new `session` id.
+
+### `GET /api/info`
+
+`{ name, inbox, text, defaultModel, models: [{ id, name }], version, tools: [{ name, kind, description }] }`.
+`text` says whether `POST /api/chat` has a model; `models` lists the ids it accepts.
+
+### `POST /api/tool`
+
+`{ name, args, safe, session }` runs one tool through the policy, for a client
+driving its own model (the voice screen does). The answer is the tool's
+result, redacted, or `{ error }`; a slow tool answers `{ job, status: "working" }`
+and `GET /api/job/<id>` gives `{ status: "done", result }` when it's finished.
+
+### Your own text model
+
+A text model is any `ChatModel` (from `/server`): a `name` and one `turn`
+call. The chat loop owns history, tool calls and policy; the adapter only
+translates.
+
+```ts
+import type { ChatModel } from "@hevmind/dots/server";
+
+const mine: ChatModel = {
+  name: "my-provider/model-id",
+  async turn({ system, history, tools }) {
+    // history: { role: "user", text, images? } | { role: "model", text?, calls?, raw? } | { role: "tool", results }
+    // Answer with text, or with calls: [{ id, name, args }] for the loop to run and send back.
+    return { text: "…" };
+  },
+};
+```
+
+`raw` is returned to the same adapter on the next turn unchanged, for
+providers that need their own turn back (Gemini's thought signatures).
 
 ## Slack
 

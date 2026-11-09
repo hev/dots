@@ -5,7 +5,7 @@ own sources, that say nothing they can't source and act only after a yes.**
 
 This is the mission of the `dots` line (the DOT team in Linear) and of its
 repos: hev/dots, the open framework, and the dots built on it: hev/dot (hev
-mind's), hev/me (Adam's), hev/dasha (Dasha's) and hev/bcc-dot (Story's).
+mind's), hev/me (Adam's), hev/dasha (Dasha's) and a client's dot.
 Two clauses, and each is a test a plan has to pass.
 
 ## A tool for working
