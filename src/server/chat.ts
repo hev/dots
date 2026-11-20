@@ -1,11 +1,11 @@
 // A text turn loop over the same dot: same persona, same tools, same policy.
 // Text surfaces (Slack, later others) use this; the voice surface talks to the
-// speech provider directly. Every tool call goes through dot.invoke(), so an
-// act still needs a read-back and a matching yes, checked on the server.
+// speech provider directly. Every tool call goes through dot.invoke(), so a tool
+// that asks first is held for the user's yes, checked on the server.
 
 import type { Dot } from "./dot.ts";
 import type { ClientEvent } from "./traces.ts";
-import type { Ctx, Store, ToolDecl } from "./types.ts";
+import type { Ctx, PendingApproval, Store, ToolDecl } from "./types.ts";
 
 /** A photo attached to a typed turn: base64 data, no data: prefix. `thumb`, a small data: URL from the screen, is kept for the thread. */
 export type Image = { mimeType: string; data: string; thumb?: string };
@@ -42,6 +42,8 @@ export type TurnHooks = {
   onDisplay?(name: string, result: unknown): void | Promise<void>;
   /** A slow tool started; the surface can say it's working. */
   onSlow?(name: string): void | Promise<void>;
+  /** A call is held for the user's yes; the surface can draw the approval card. */
+  onApproval?(name: string, approval: PendingApproval): void | Promise<void>;
 };
 
 const POLL_MS = 1500;
@@ -68,19 +70,23 @@ export function chat(o: ChatOptions) {
   return {
     /** One user message in, the dot's reply out. */
     async turn(ctx: Ctx, text: string, hooks: TurnHooks = {}, images: Image[] = []): Promise<string> {
-      // Act receipts need the yes in a later turn than the read-back.
+      // A spoken (typed) yes has to come in a later turn than the call it approves.
       ctx = { ...ctx, turn: crypto.randomUUID() };
       const key = keyOf(ctx);
       const history = (((await o.store.get(key)) as Msg[] | undefined) ?? []).slice(-keep).map((m): Msg =>
         m.role === "model" && m.model !== o.model.name ? { ...m, raw: undefined } : m);
       const thumbs = images.flatMap((i) => (i.thumb ? [i.thumb] : []));
       const trace: ClientEvent[] = [{ kind: "u", id: `${Date.now()}u`, ts: Date.now(), text, ...(images.length ? { photos: thumbs.length === images.length ? thumbs : images.map(() => "") } : {}) }];
-      history.push({ role: "user", text, ...(images.length ? { images: images.map(({ mimeType, data }) => ({ mimeType, data })) } : {}) });
+      // What happened off the model's view since its last turn (an approval card answered), as notes from the app.
+      const notes = await o.dot.notes(ctx.session);
+      const said = notes.length ? `${notes.map((n) => `[note from the app] ${n}`).join("\n")}\n${text}` : text;
+      history.push({ role: "user", text: said, ...(images.length ? { images: images.map(({ mimeType, data }) => ({ mimeType, data })) } : {}) });
       const system = await o.dot.persona(ctx.demo, o.surface);
+      const decls = await o.dot.decls();
 
       let reply = "";
       for (let step = 0; step < maxSteps; step++) {
-        const out = await o.model.turn({ system, history, tools: o.dot.registry.decls });
+        const out = await o.model.turn({ system, history, tools: decls });
         history.push({ role: "model", text: out.text, calls: out.calls, raw: out.raw, model: o.model.name });
         if (!out.calls?.length) {
           reply = out.text ?? "";
@@ -95,6 +101,7 @@ export function chat(o: ChatOptions) {
             await hooks.onSlow?.(c.name);
             body = await finish(String((body as { job: string }).job));
           }
+          if (body && typeof body === "object" && "pending_approval" in body) await hooks.onApproval?.(c.name, (body as { pending_approval: PendingApproval }).pending_approval);
           if (kind === "display" && !(body && typeof body === "object" && "error" in body)) {
             await hooks.onDisplay?.(c.name, body);
             body = { shown: true };

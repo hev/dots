@@ -1,5 +1,6 @@
 // A fixture dot for the UAT: fake voice and text model, no outside calls, no
-// writes. It serves the real screen and the real routes at the build it's told.
+// writes outside the process (its one act, log_time, only answers what it logged;
+// settings are kept in memory). It serves the real screen and the real routes at the build it's told.
 // Prints "listening <port>" once it's up. Env: UAT_COMMIT (full sha), PORT (default: free).
 
 import { createServer } from "node:http";
@@ -15,6 +16,12 @@ const model: ChatModel = {
   async turn({ history }) {
     const last = history.at(-1);
     if (last?.role === "user" && /notes/i.test(last.text)) return { calls: [{ id: "c1", name: "open_app", args: { app: "notes" } }] };
+    const hours = last?.role === "user" ? /(?:^|\n)log (\d+)h\b/i.exec(last.text) : null;
+    if (hours) return { calls: [{ id: "c2", name: "log_time", args: { duration: hours[1] + "h" } }] };
+    if (last?.role === "tool" && last.results[0].name === "log_time") {
+      const r = last.results[0].result as { pending_approval?: unknown; logged?: string };
+      return { text: r.pending_approval ? "Waiting for your yes." : "Logged " + r.logged + "." };
+    }
     return { text: last?.role === "tool" ? "Opened." : "You said: " + (last?.role === "user" ? last.text : "") };
   },
 };
@@ -23,14 +30,24 @@ const dot = await defineDot({
   name: "uat",
   persona: ({ capabilities }) => `A fixture dot.\n${capabilities}`,
   voice: { name: "fixture", mint: async () => ({ error: "fixture has no voice" }) },
-  tools: [local([defineTool({ name: "today", description: "Today's plan.", run: () => ({ plan: "fixture" }) })]), appTools({ notes: "a scratch view" })],
+  tools: [
+    local([
+      defineTool({ name: "today", description: "Today's plan.", run: () => ({ plan: "fixture" }) }),
+      // An act that changes nothing outside this process: the approval card's subject.
+      defineTool({ name: "log_time", kind: "act", description: "Log hours.", parameters: { type: "object", properties: { duration: { type: "string" } } }, run: (a) => ({ logged: a.duration }) }),
+    ]),
+    appTools({ notes: "a scratch view" }),
+  ],
+  live: true,
+  voices: ["Algenib", "Puck"],
+  defaults: { systemPrompt: "Be brief." },
   chat: model,
   chatModels: { fixture: model, alternate: { ...model, name: "alternate-fixture" } },
   identity: async () => "uat@example.com",
   logins: ["uat@example.com"],
   version,
 });
-const page = screenRoutes({ name: "uat", subtitle: "fixture", apps, version });
+const page = screenRoutes({ name: "uat", subtitle: "fixture", apps, version, configurator: { icons: [{ label: "fixture", src: "/icon.png" }], themes: [{ label: "sea", color: "#336699" }] } });
 
 const server = createServer(async (req, res) => {
   const url = `http://${req.headers.host}${req.url}`;

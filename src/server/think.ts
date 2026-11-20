@@ -7,7 +7,7 @@
 
 import type { ChatModel, Msg } from "./chat.ts";
 import type { Registry } from "./tools.ts";
-import type { Ctx } from "./types.ts";
+import type { Ctx, ToolDecl } from "./types.ts";
 
 export type SubagentOptions = {
   /** The thinking model, e.g. geminiChat({ apiKey, model: "gemini-3.1-pro-preview" }). */
@@ -48,11 +48,13 @@ export async function think(
   ctx: Ctx,
   deps: {
     tools: Registry;
+    /** The tools the user has on now; defaults to every registered one. */
+    decls?: ToolDecl[];
     persona: string;
     invoke: (name: string, args: Record<string, unknown>, ctx: Ctx) => Promise<{ status: number; body: unknown }>;
   },
 ): Promise<{ answer: string } | { error: string }> {
-  const decls = deps.tools.decls.filter((d) => (d.kind ?? "read") === "read" || d.kind === "private");
+  const decls = (deps.decls ?? deps.tools.decls).filter((d) => (d.kind ?? "read") === "read" || d.kind === "private");
   const open = new Set(decls.map((d) => d.name));
   const history: Msg[] = [{ role: "user", text: question }];
   const system = `${deps.persona}\n\n${RULES}`;

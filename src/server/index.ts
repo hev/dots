@@ -1,8 +1,9 @@
 export { defineDot, type Dot, type DotOptions, type PersonaInput, type ThreadLine, type ThreadSummary } from "./dot.ts";
-export { ACT_RULES, defineTool, http, local, registry, type Registry } from "./tools.ts";
+export { ACT_RULES, capabilityLines, CONFIRM, defineTool, http, local, registry, type Registry } from "./tools.ts";
 export { redactor, type Redactor, type RedactOptions } from "./redact.ts";
-export { gate, readbackText, type Gate, type GateOptions, type Readback } from "./receipts.ts";
-export { memorySink, memoryStore } from "./stores.ts";
+export { readbackText, summarize, type ApprovalOptions } from "./receipts.ts";
+export { applyPatch, defaultSetting, effective, type ConfigDefaults } from "./config.ts";
+export { memoryConfig, memorySink, memoryStore, storeConfig } from "./stores.ts";
 export { toLines, type ClientEvent } from "./traces.ts";
 export type * from "./types.ts";
 export { chat, type ChatModel, type ChatOptions, type Call, type Image, type Msg, type TurnHooks } from "./chat.ts";

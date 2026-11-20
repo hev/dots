@@ -1,8 +1,12 @@
 // The voice screen: one page that talks to a dot. Tap the dot, speak, and it
 // answers over Gemini Live with the persona and tools the server locked into the
-// token. Tool calls go to the dot's own /api/tool with the session id, so acts
-// read back and run only on a matching yes; slow tools poll /api/job; display
-// tools ({url, label}) put a link on screen and the model hears only that it's up.
+// token. Tool calls go to the dot's own /api/tool with the session id, so the
+// server's approval policy holds: a call that needs a yes comes back as
+// `pending_approval` and is drawn inline as an approval card (Approve, Always
+// approve, Cancel, posted to /api/approvals/:id as the signed-in user); slow tools
+// poll /api/job; display tools ({url, label}) put a link on screen and the model
+// hears only that it's up. The name, icon and orb theme the user set in the
+// configurator (/config, see configurator.ts) come from /api/info.
 // Typed questions are answered in text (POST /chat, when the dot has a text
 // model), so typing never wakes the voice. The header is ☰, the wordmark, the
 // mode lock and "i". "i" opens info: the dot's tools, the inbox it reads, the log
@@ -26,6 +30,9 @@
 import { installHead, type InstallOptions } from "../install/index.ts";
 import type { Pack, Version } from "../server/types.ts";
 import { APPS } from "./apps.ts";
+import { configRoutes, type ConfiguratorOptions } from "./configurator.ts";
+
+export { configurator, configRoutes, type ConfiguratorOptions } from "./configurator.ts";
 
 export type ScreenOptions = {
   /** Shown as the wordmark and the page title. */
@@ -80,6 +87,8 @@ export type ScreenOptions = {
   version?: Version;
   /** The dot's own earcons: notes as [hz, seconds], with an oscillator type, gain and gap. */
   sounds?: Partial<Record<"tick" | "working" | "card" | "link" | "error", Sound>>;
+  /** The desktop configurator, served at /config by screenRoutes. Default on (it still needs an allowed login to load); false leaves it out. */
+  configurator?: boolean | Omit<ConfiguratorOptions, "name" | "base">;
 };
 
 /** An app is HTML and/or JS the dot owns. The screen gives it a container and `dot:*` events. */
@@ -177,10 +186,13 @@ function theme(t: ScreenOptions["theme"]): string {
   return (light ? `:root{${light}}` : "") + (dark ? `@media (prefers-color-scheme:dark){:root{${dark}}}` : "");
 }
 
-/** Serves the screen at "/" (and "/index.html"); null for anything else, so it chains. */
+/** Serves the screen at "/" (and "/index.html") and the configurator at "/config"; null for anything else, so it chains. */
 export function screenRoutes(o: ScreenOptions) {
   const body = screen(o);
+  const settings = o.configurator === false ? null : configRoutes({ name: o.name, base: o.base, accent: o.accent, ...(typeof o.configurator === "object" ? o.configurator : {}) });
   return (req: Request): Response | null => {
+    const page = settings?.(req);
+    if (page) return page;
     const p = new URL(req.url).pathname;
     if (req.method !== "GET" || (p !== "/" && p !== "/index.html")) return null;
     return new Response(body, { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-cache" } });
@@ -295,6 +307,12 @@ main{justify-content:flex-start;align-items:stretch;gap:8px;padding-top:8px}
 #type{resize:vertical;min-height:64px;max-height:30dvh;border-radius:12px;min-width:0}
 #send,select{min-height:44px}#modelLabel{font-size:13px}
 button:focus-visible,textarea:focus-visible,select:focus-visible{outline:2px solid var(--sig);outline-offset:2px}
+#conversation .m.approval{border:1px solid var(--second,var(--sig));white-space:normal;margin-right:12%}
+.approval b{display:block;font-size:15px}.approval .sum{font:13px var(--mono);color:var(--muted);margin-top:4px;overflow-wrap:anywhere}
+.approval .btns{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}.approval .btns button{min-height:44px;padding:8px 14px;font-size:14px}
+.approval .btns .ap-approve{background:var(--sig);border-color:var(--sig);color:#fff;font-weight:600}
+.approval .btns button:disabled{opacity:.45;cursor:default}.approval .st{font:12px var(--mono);color:var(--muted);margin-top:6px}.approval .st:empty{display:none}
+.approval.done .btns{display:none}.approval.err .st{color:#c0392b}
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}}
 `;
 
@@ -510,10 +528,48 @@ async function tools(calls){ const g=gen;
     else if(result?.url&&result.label&&!result.error){ showLink(result.url,result.label); result={shown:true}; }
     else if(result?.app&&!result.error){ const ok=openApp(result.app); result=ok?{shown:true,...(result.note?{note:result.note}:{})}:{error:'no app called '+result.app}; }
     else if(result?.close_app&&!result.error){ closeApp(); result={shown:true}; }
+    if(result?.pending_approval) showApproval(result.pending_approval);
+    if(fc.name==='confirm_action'&&result?.id&&result.tool) settle(result.id,'approve',{status:200},result,true);
     if(result?.error) ear.error(); emit('done',{name:fc.name,error:!!result?.error});
     chip.className='chip'+(result?.error?' err':''); chip.textContent=(result?.error?'✗ ':'✓ ')+label(fc.name); setTimeout(()=>chip.remove(),6000);
     return {id:fc.id,name:fc.name,response:{result}}; }));
   if(g===gen) ws?.send(JSON.stringify({toolResponse:{functionResponses:responses}})); }
+
+/* approvals: a call the server is holding for a yes, drawn inline in the conversation. The buttons post the user's
+   answer to /api/approvals/:id; the server checks who is asking and runs the held call (never anything the page sends).
+   A spoken yes goes the other way, through the model's confirm_action, and settles the same card. */
+const cards=new Map();
+const argLine=p=>{ const a=Object.entries(p.args||{}).map(([k,v])=>k.replace(/_/g,' ')+': '+(typeof v==='string'?v:JSON.stringify(v))).join(' · '); return a.length>240?a.slice(0,239)+'…':a; };
+function showApproval(p){ if(!p?.id||cards.has(p.id)) return;
+  const el=document.createElement('div'); el.className='m approval'; el.dataset.id=p.id; el.setAttribute('role','group'); el.setAttribute('aria-label','Approve '+label(p.tool)+'?');
+  const h=document.createElement('b'); h.textContent='Approve '+label(p.tool)+'?';
+  const sum=document.createElement('div'); sum.className='sum'; sum.textContent=argLine(p)||'no details';
+  const row=document.createElement('div'); row.className='btns';
+  const st=document.createElement('div'); st.className='st'; st.setAttribute('role','status');
+  const btns=[['approve','Approve'],['always','Always approve'],['deny','Cancel']].map(([d,t])=>{ const b=document.createElement('button'); b.className='ap-'+d; b.dataset.d=d; b.textContent=t; b.onclick=()=>answer(p.id,d); row.append(b); return b; });
+  el.append(h,sum,row,st); cards.set(p.id,{el,btns,st,p,busy:false});
+  $('#conversation').append(el); $('#conversation').scrollTop=1e9;
+  log('t','⏸ '+(p.summary||label(p.tool))+' · waiting for your yes',{approval:p.id}); status('waiting for your yes'); emit('approval',{approval:p}); }
+async function answer(id,d){ const c=cards.get(id); if(!c||c.busy) return; c.busy=true; c.btns.forEach(b=>{ b.disabled=true; }); c.st.textContent=d==='deny'?'cancelling…':'running…';
+  let r=null, body={}; try{ r=await fetch(API+'/approvals/'+encodeURIComponent(id),{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({decision:d})}); body=await r.json().catch(()=>({})); }catch{}
+  if(!r||r.status>=500){ c.busy=false; c.btns.forEach(b=>{ b.disabled=false; }); c.st.textContent='Couldn’t reach '+CFG.name+'. Try again.'; ear.error(); return; }
+  settle(id,d,r,body); }
+/* the card's last word, and the model's: with voice on, it hears what the user chose on the card (a spoken yes it
+   relayed itself); typed turns get it from the server */
+function settle(id,d,r,body,spoken=false){ const c=cards.get(id); if(!c||c.el.classList.contains('done')) return; const p=c.p; cards.set(id,{...c,busy:true});
+  const res=body?.result, err=body?.error||res?.error;
+  const words=r.status===404?'No longer waiting: it was answered, cancelled or it expired.':err?'✗ '+err:d==='deny'?'Cancelled. It didn’t run.':d==='always'?'Approved, and from now on it runs without asking.':res?.dry_run?'Approved (a dry run: nothing was changed).':'Approved. Done.';
+  c.el.classList.add('done'); c.el.classList.toggle('err',!!err||r.status===404); c.st.textContent=words; c.btns.forEach(b=>{ b.disabled=true; });
+  log('t',(err||r.status===404?'✗ ':d==='deny'?'⊘ ':'✓ ')+(p.summary||label(p.tool))+' · '+words,{approval:id,decision:d});
+  if(res?.card&&!err) showCard(res.card); else if(res?.url&&res.label&&!err) showLink(res.url,res.label);
+  if(err) ear.error(); else ear.tick(); emit('approved',{id,decision:d,error:!!err}); status('Ready to chat');
+  if(!spoken&&ws&&ready&&r.status!==404) note('The user '+(d==='deny'?'cancelled':'approved')+' '+(p.summary||p.tool)+' on the approval card'+(d==='always'?' and set it to run without asking from now on':'')+'. '+(d==='deny'?'It did not run.':'Result: '+JSON.stringify(err?{error:err}:res).slice(0,1500))); }
+
+/* the look the user set in the configurator: name, icon and orb theme, applied over the dot's own */
+function look(id){ if(!id) return;
+  if(id.name&&id.name!==CFG.name){ CFG.name=id.name; document.title=id.name; const wm=$('.wm'); if(wm){ const sfx=$('.wm .sfx'); wm.innerHTML=esc(id.name)+'<span class="cur"></span>'+(sfx?.outerHTML||''); } }
+  if(id.icon&&/^(https:\/\/|\/(?!\/))[^"'<>\s]+$/.test(id.icon)){ const core=$('#core'); if(core?.tagName==='IMG') core.src=id.icon; else if(core){ const img=document.createElement('img'); img.id='core'; img.className='art'; img.alt=''; img.src=id.icon; core.replaceWith?.(img); } }
+  if(/^#[0-9a-f]{3,8}$/i.test(id.theme||'')) document.documentElement.style.setProperty?.('--sig',id.theme); }
 
 /* slow tools: poll the job, then hand the result back to relay */
 function awaitJob(fc,id){ const t0=Date.now(), g=gen; busy++;
@@ -542,6 +598,7 @@ async function ask(t){ voiceEnabled=false; stop(); sfx?.close?.(); sfx=null; con
     let i; while((i=buf.indexOf('\n'))>=0){ const line=buf.slice(0,i); buf=buf.slice(i+1); if(!line.trim()) continue; const m=JSON.parse(line);
       if(m.slow){ status('asking a sub-agent…'); const c=document.createElement('span'); c.className='chip'; c.textContent='⟳ '+label(m.slow); $('#chips').append(c); chips.push(c); }
       if(m.display){ if(m.display.card) showCard(m.display.card); else if(m.display.url) showLink(m.display.url,m.display.label); else if(m.display.app) openApp(m.display.app); else if(m.display.close_app) closeApp(); }
+      if(m.approval) showApproval(m.approval);
       if(m.error){ chips.forEach(c=>c.remove()); throw new Error(m.error); }
       if(typeof m.reply==='string'){ replied=true; $('#say').textContent=m.reply; show('d',m.reply); } } }
   chips.forEach(c=>c.remove()); if(!replied) throw new Error('The reply was interrupted. Try again.'); status('Ready to chat'); return true; }
@@ -570,7 +627,7 @@ $('#photo').onchange=async e=>{ const files=[...e.target.files].slice(0,4-pendin
   drawPending(); if(ws&&ready&&pending.length) photosToLive($('#type').value.trim()||''); };
 
 /* switching session: the old one's trace ships; everything on screen and in the Live session goes */
-function reset(sid){ ship(false); gen++; busy=0; stop(); handle=null; apps.close(); resumed=null;
+function reset(sid){ ship(false); gen++; busy=0; stop(); handle=null; apps.close(); resumed=null; cards.clear();
   SID=sid||newSid(); T0=Date.now(); trace=[]; seq=0;
   for(const s of ['#conversation','#list','#links','#chips','#you','#say','#logStats']) $(s).textContent='';
   markStart(); closeLog(); status('Ready to chat'); }
@@ -608,6 +665,7 @@ function context(lines){ const said=lines.filter(l=>l.k!=='t').slice(-12).map(l=
   if(said) ws?.send(JSON.stringify({clientContent:{turns:[{role:'user',parts:[{text:'[note from the app, not from '+CFG.user+'] This picks up an earlier conversation. It went:\n'+said}]}],turnComplete:false}})); }
 let selectedModel='', sending=false;
 fetch(API+'/info').then(r=>{if(!r.ok) throw new Error(); return r.json();}).then(i=>{
+  look(i.identity);
   const models=Array.isArray(i.models)?i.models:[];
   const select=$('#model'); select.textContent='';
   const fallback=document.createElement('option'); fallback.value=''; fallback.textContent=i.defaultModel||'Text unavailable'; select.append(fallback);

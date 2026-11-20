@@ -262,6 +262,135 @@ async function preview() {
       }
       return "ok";
     });
+    await check("browser: approval card on mobile: approve runs once, always stops asking, cancel doesn't run", async () => {
+      const { chromium } = await playwright();
+      const b = await chromium.launch();
+      try {
+        const p = await b.newPage({ viewport: { width: 390, height: 800 } });
+        const errors = [];
+        p.on("pageerror", (e) => errors.push(String(e)));
+        const posts = [];
+        p.on("request", (r) => { if (r.url().includes("/api/approvals/")) posts.push(r.postDataJSON()); });
+        await p.goto(base + "/");
+        const card = (n) => p.locator("#conversation .approval").nth(n);
+        // Approve
+        await p.fill("#type", "log 1h");
+        await p.press("#type", "Enter");
+        await card(0).waitFor();
+        expect((await card(0).locator("b").textContent()) === "Approve log time?", "card names the tool");
+        expect((await card(0).locator(".sum").textContent()) === "duration: 1h", "card shows the arguments");
+        for (const name of ["Approve", "Always approve", "Cancel"]) expect(await card(0).getByRole("button", { name, exact: true }).isVisible(), name + " visible");
+        expect(await p.evaluate(() => document.documentElement.scrollWidth <= innerWidth), "no horizontal overflow");
+        mkdirSync(dir, { recursive: true });
+        await p.screenshot({ path: join(dir, "approval-card.png") });
+        await card(0).getByRole("button", { name: "Approve", exact: true }).click();
+        await p.waitForFunction(() => document.querySelector("#conversation .approval .st")?.textContent === "Approved. Done.");
+        expect(await card(0).getByRole("button", { name: "Approve", exact: true }).isHidden(), "buttons go once answered");
+        // Cancel
+        await p.fill("#type", "log 2h");
+        await p.press("#type", "Enter");
+        await card(1).waitFor();
+        await card(1).getByRole("button", { name: "Cancel", exact: true }).click();
+        await p.waitForFunction(() => document.querySelectorAll("#conversation .approval")[1]?.querySelector(".st")?.textContent.startsWith("Cancelled"));
+        // Always approve, then the next call runs without a card
+        await p.fill("#type", "log 3h");
+        await p.press("#type", "Enter");
+        await card(2).waitFor();
+        await card(2).getByRole("button", { name: "Always approve", exact: true }).click();
+        await p.waitForFunction(() => /without asking/.test(document.querySelectorAll("#conversation .approval")[2]?.querySelector(".st")?.textContent || ""));
+        await p.fill("#type", "log 4h");
+        await p.press("#type", "Enter");
+        await p.waitForFunction(() => document.querySelector("#conversation")?.textContent.includes("Logged 4h."));
+        expect((await p.locator("#conversation .approval").count()) === 3, "no card once it's always");
+        expect(JSON.stringify(posts) === JSON.stringify([{ decision: "approve" }, { decision: "deny" }, { decision: "always" }]), "posts: " + JSON.stringify(posts));
+        // The card's answer is the user's alone: an anonymous approval is refused by the server.
+        const anon = await fetch(base + "/api/approvals/00000000-0000-0000-0000-000000000000", { method: "POST", headers: { "content-type": "text/plain" }, body: '{"decision":"approve"}' });
+        expect(anon.status === 415, "a non-JSON post is refused: " + anon.status);
+        await p.screenshot({ path: join(dir, "approval-done.png") });
+        expect(!errors.length, "page errors: " + errors.join("; "));
+      } finally {
+        await b.close();
+      }
+      return "approve, cancel, always approve; the next call ran without a card";
+    });
+    await check("browser: configurator at /config loads, saves tools, identity, prompt and sources, and survives reload", async () => {
+      const { chromium } = await playwright();
+      const b = await chromium.launch();
+      try {
+        const p = await b.newPage({ viewport: { width: 1280, height: 860 } });
+        const errors = [];
+        p.on("pageerror", (e) => errors.push(String(e)));
+        await p.goto(base + "/config");
+        await p.waitForSelector('#toolList .tool[data-tool="log_time"]');
+        expect((await p.getAttribute('.tool[data-tool="log_time"] [data-approval="always"]', "aria-pressed")) === "true", "the card's Always approve shows here");
+        // Tools & approvals
+        await p.click('.tool[data-tool="log_time"] [data-approval="deny"]');
+        await p.uncheck('.tool[data-tool="today"] input[type=checkbox]');
+        expect(await p.isEnabled("#save"), "save lights up when dirty");
+        mkdirSync(dir, { recursive: true });
+        await p.screenshot({ path: join(dir, "config-tools.png") });
+        // Identity & look
+        await p.click("#tab-identity");
+        await p.fill("#idName", "UAT Pip");
+        await p.click('#iconPresets [data-src="/icon.png"]');
+        await p.click('#themePresets [data-color="#336699"]');
+        await p.selectOption("#idVoice", "Puck");
+        await p.selectOption("#idModel", "alternate");
+        // System prompt: dirty mark, diff, reset
+        await p.click("#tab-prompt");
+        expect((await p.inputValue("#promptText")) === "Be brief.", "default prompt loads");
+        await p.fill("#promptText", "Be brief.\nSpeak like a sailor.");
+        await p.waitForFunction(() => document.querySelector("#promptMark").classList.contains("dirty"));
+        expect((await p.textContent("#promptDiff")).includes("+ Speak like a sailor."), "diff shows the added line");
+        await p.click("#promptReset");
+        expect((await p.inputValue("#promptText")) === "Be brief.", "reset to default");
+        await p.fill("#promptText", "Be brief.\nSpeak like a sailor.");
+        // Sources
+        await p.click("#tab-sources");
+        await p.click("#addSource");
+        await p.fill("#sourceList .src:last-child textarea", '{"kind":"feed","name":"news","url":"https://example.com/rss"}');
+        mkdirSync(dir, { recursive: true });
+        await p.screenshot({ path: join(dir, "config-dirty.png") });
+        const put = p.waitForResponse((r) => r.url().endsWith("/api/config") && r.request().method() === "PUT");
+        await p.click("#save");
+        expect((await put).status() === 200, "PUT saved");
+        await p.waitForFunction(() => document.querySelector("#dirty").textContent === "all saved");
+        // Reload: every edit is still there
+        await p.reload();
+        await p.waitForSelector('#toolList .tool[data-tool="log_time"]', { state: "attached" });
+        expect(await p.isVisible("#sourceList"), "the tab you were on comes back");
+        await p.click("#tab-tools");
+        expect((await p.getAttribute('.tool[data-tool="log_time"] [data-approval="deny"]', "aria-pressed")) === "true", "deny kept");
+        expect(!(await p.isChecked('.tool[data-tool="today"] input[type=checkbox]')), "today off kept");
+        await p.click("#tab-identity");
+        expect((await p.inputValue("#idName")) === "UAT Pip", "name kept");
+        expect((await p.inputValue("#idIcon")) === "/icon.png", "icon kept");
+        expect((await p.inputValue("#idTheme")) === "#336699", "theme kept");
+        expect((await p.inputValue("#idVoice")) === "Puck", "voice kept");
+        expect((await p.inputValue("#idModel")) === "alternate", "model kept");
+        await p.click("#tab-prompt");
+        expect((await p.inputValue("#promptText")) === "Be brief.\nSpeak like a sailor.", "prompt kept");
+        expect((await p.textContent("#promptMark")).includes("edited from the default"), "marked as edited");
+        await p.click("#tab-sources");
+        expect((await p.inputValue("#sourceList .src textarea")).includes('"url": "https://example.com/rss"'), "source kept");
+        await p.screenshot({ path: join(dir, "config-saved.png") });
+        // The server refuses a bad value whole, and the page says so
+        await p.click("#tab-identity");
+        await p.fill("#idIcon", "javascript:alert(1)");
+        await p.click("#save");
+        await p.waitForFunction(() => /Not saved: icon/.test(document.querySelector("#toast").textContent));
+        // Takes effect without a restart: the screen draws the new name, and the denied tool is refused
+        const s = await b.newPage({ viewport: { width: 390, height: 800 } });
+        await s.goto(base + "/");
+        await s.waitForFunction(() => document.title === "UAT Pip");
+        const i = await (await get(base + "/api/info")).json();
+        expect(i.identity.name === "UAT Pip" && i.defaultModel === "alternate-fixture" && !i.tools.some((t) => t.name === "today"), "info: " + JSON.stringify(i.identity));
+        expect(!errors.length, "page errors: " + errors.join("; "));
+      } finally {
+        await b.close();
+      }
+      return "tools/approvals, identity, prompt (diff, reset), sources saved and reloaded; screen took the new name";
+    });
   } finally {
     child.removeAllListeners("exit");
     child.kill();

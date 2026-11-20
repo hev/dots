@@ -34,7 +34,11 @@ function scripted(): ChatModel & { systems: string[]; seen: number[] } {
       const call = (name: string, args: Record<string, unknown> = {}): { calls: Call[] } => ({ calls: [{ id: name, name, args }] });
       if (/floor/.test(last.text)) return call("floor_status");
       if (/log an hour/.test(last.text)) return call("log_time", { duration: "1h" });
-      if (/^yes/.test(last.text)) return call("log_time", { duration: "1h", confirmed: true });
+      if (/^yes/.test(last.text)) {
+        // A yes in text: the model relays it for the approval the server is holding.
+        const held = history.flatMap((m) => (m.role === "tool" ? m.results : [])).map((r) => (r.result as any)?.pending_approval).filter(Boolean).at(-1);
+        return call("confirm_action", { id: held?.id });
+      }
       if (/link/.test(last.text)) return call("show_link");
       if (/why/.test(last.text)) return call("deep_think", { question: last.text });
       return { text: "hello" };
@@ -93,16 +97,16 @@ test("other channels, bots and edits are ignored", async () => {
   assert.equal(posted.length, 0);
 });
 
-test("an act reads back in the thread and runs on Adam's yes", async () => {
+test("an act waits for approval in the thread and runs on Adam's yes", async () => {
   const { s, say } = await setup();
   ran.length = 0;
   await say("log an hour to admin");
-  assert.equal(ran.length, 0, "the read-back doesn't run it");
+  assert.equal(ran.length, 0, "held for a yes, not run");
   const reply = { type: "message", channel: CHANNEL, thread_ts: "100.1", text: "yes, do it" };
   await s.handle({ ...reply, user: "USTRANGER", ts: "100.2" });
   assert.equal(ran.length, 0, "a yes from someone unmapped doesn't run it");
   await s.handle({ ...reply, user: ADAM_SLACK, ts: "100.3" });
-  assert.deepEqual(ran, [{ duration: "1h", confirmed: true }]);
+  assert.deepEqual(ran, [{ duration: "1h" }]);
 });
 
 test("thread replies need a thread the dot was mentioned in", async () => {
