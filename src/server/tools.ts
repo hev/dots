@@ -46,34 +46,59 @@ export function http(opts: {
 }
 
 /**
- * How every act works, for the persona: the framework's half of the act prompt.
- * The server's read-back is the script; the model's own paraphrase never is.
+ * How approvals work, for the persona: the framework's half of the act prompt.
+ * The server holds the call; the user approves it on the card or out loud.
  */
 export const ACT_RULES =
-  "Actions (needs a yes): ALWAYS call the action first WITHOUT confirmed. The server answers with a read-back: " +
-  "say its `text` to the user exactly as given, word for word, never your own paraphrase, and wait for a clear yes. " +
-  "Only after that yes, in the user's next turn, call again with the very same arguments plus confirmed=true. " +
-  "If the server says \"Not sent yet\", read its text back and ask again; if it says STOP, stop: tell the user plainly " +
-  "it didn't go through and why, and don't call it again.";
+  "Tools marked (needs a yes): call the tool once, with the arguments you mean. The server applies the user's own " +
+  "approval setting. If it answers `pending_approval`, an approval card with Approve, Always approve and Cancel is now " +
+  "on the user's screen: say in one short sentence what is waiting (use its `summary`) and stop. Don't call the tool " +
+  "again. If the user then clearly says yes to it out loud, call confirm_action with that approval's `id`; never " +
+  "without hearing a yes, and never in the same breath as the tool call. If a tool is refused by the user's " +
+  "settings, say so plainly and don't retry.";
 
-const CONFIRMED = {
-  type: "boolean" as const,
-  description: "Leave out on the first call. Set true only after reading back the server's read-back text word for word and hearing a clear yes.",
+/** The tool a spoken yes goes through. Framework-owned: no tool server may declare it. */
+export const CONFIRM = "confirm_action";
+
+export const CONFIRM_DECL: ToolDecl = {
+  name: CONFIRM,
+  kind: "act",
+  description:
+    "Approve one pending approval, only after the user clearly said yes to it out loud. Runs the held call once, with the arguments on the card.",
+  parameters: {
+    type: "object",
+    properties: { id: { type: "string", description: "The `id` from the pending_approval the server answered." } },
+    required: ["id"],
+  },
 };
 
-/** An act's declaration, with `confirmed` added if the dot left it out, so the model knows the field. */
-function actDecl(d: ToolDecl): ToolDecl {
-  if (d.kind !== "act") return d;
-  const p = d.parameters ?? { type: "object" };
-  if (p.properties?.confirmed) return d;
-  return { ...d, parameters: { ...p, type: "object", properties: { ...p.properties, confirmed: CONFIRMED } } };
+/** One line per tool: what it does, and what it needs. `approval` says each tool's current setting. */
+export function capabilityLines(decls: ToolDecl[], approval: (name: string) => string = () => "always"): string {
+  const lines = decls
+    .filter((d) => d.name !== CONFIRM)
+    .map((d) => {
+      const first = d.description.split(/\. (?=[A-Z])/)[0].replace(/\.$/, "");
+      const a = approval(d.name);
+      const tag = a === "ask" ? " (needs a yes)" : a === "deny" ? " (refused by the user's settings)" : d.kind === "private" ? " (private mode only)" : "";
+      return `- ${d.name}${tag}: ${first}`;
+    })
+    .join("\n");
+  return decls.some((d) => d.name !== CONFIRM && approval(d.name) === "ask") ? `${lines}\n${ACT_RULES}` : lines;
+}
+
+/** An act declared for the old read-back flow keeps its `confirmed` field out of the model's view: approval is the server's now. */
+function withoutConfirmed(d: ToolDecl): ToolDecl {
+  if (!d.parameters?.properties?.confirmed) return d;
+  const { confirmed: _c, ...properties } = d.parameters.properties;
+  const required = d.parameters.required?.filter((r) => r !== "confirmed");
+  return { ...d, parameters: { ...d.parameters, properties, ...(required ? { required } : {}) } };
 }
 
 export type Registry = {
   decls: ToolDecl[];
   kind(name: string): ToolDecl["kind"];
   call(name: string, args: Record<string, unknown>, ctx: Ctx): Promise<unknown>;
-  /** One line per tool, so a dot's sense of what it can do never drifts from what it has. */
+  /** One line per tool, so a dot's sense of what it can do never drifts from what it has. Acts ask, by default. */
   capabilities(): string;
 };
 
@@ -82,15 +107,17 @@ export async function registry(servers: ToolServer[]): Promise<Registry> {
   const decls: ToolDecl[] = [];
   for (const s of servers) {
     for (const d of await s.list()) {
+      if (d.name === CONFIRM) throw new Error(`${CONFIRM} is the framework's own tool`);
       if (owner.has(d.name)) throw new Error(`two tool servers declare ${d.name}`);
       owner.set(d.name, s);
-      decls.push(actDecl(d));
+      decls.push(withoutConfirmed(d));
     }
   }
   const byName = new Map(decls.map((d) => [d.name, d]));
   return {
     decls,
-    kind: (name) => byName.get(name)?.kind ?? "read",
+    // confirm_action runs a held call, so it's an act: only allowed logins, never offered to the sub-agent.
+    kind: (name) => (name === CONFIRM ? "act" : byName.get(name)?.kind ?? "read"),
     async call(name, args, ctx) {
       const s = owner.get(name);
       if (!s) return { error: `unknown tool ${name}` };
@@ -101,15 +128,7 @@ export async function registry(servers: ToolServer[]): Promise<Registry> {
       }
     },
     capabilities() {
-      const lines = decls
-        .map((d) => {
-          const first = d.description.split(/\. (?=[A-Z])/)[0].replace(/\.$/, "");
-          const tag =
-            d.kind === "act" ? " (action, needs a yes)" : d.kind === "private" ? " (private mode only)" : "";
-          return `- ${d.name}${tag}: ${first}`;
-        })
-        .join("\n");
-      return decls.some((d) => d.kind === "act") ? `${lines}\n${ACT_RULES}` : lines;
+      return capabilityLines(decls, (n) => (byName.get(n)?.kind === "act" ? "ask" : "always"));
     },
   };
 }

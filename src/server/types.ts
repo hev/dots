@@ -13,7 +13,7 @@ export type JSONSchema = {
 
 /**
  * - read: answers a question. The default.
- * - act: changes something. Runs only after a read-back and a matching yes.
+ * - act: changes something. Its approval defaults to "ask": it runs only after the user approves it (see ToolSetting).
  * - private: refused in demo mode.
  * - display: the result goes to the screen; the model hears only `{shown: true}`.
  * - slow: returns a job handle at once; the client polls and hands the result back.
@@ -121,10 +121,55 @@ export type TraceLine = {
 
 export type TraceSink = (session: string, lines: TraceLine[]) => Promise<void>;
 
+/**
+ * What a tool needs before it runs, set by the user (never the model) on the server:
+ * - ask: the call is held as a pending approval until the user approves it. The default for acts.
+ * - always: it runs at once. The default for everything else.
+ * - deny: it never runs, whatever is approved.
+ */
+export type Approval = "ask" | "always" | "deny";
+
+/** One tool's setting. A tool that isn't enabled is hidden from the model and refused if called. */
+export type ToolSetting = { enabled: boolean; approval: Approval };
+
+/** How the dot presents itself: its name, icon (a URL), orb theme (a color), voice and default text model (a chatModels id). */
+export type DotIdentity = { name: string; icon: string; theme: string; voice: string; model: string };
+
+/** A source the dot reads from. Opaque to the framework: the dot gives it meaning (a Layer namespace, a calendar, a feed). */
+export type Source = Record<string, unknown>;
+
+/** The dot's settings as the user sees them in the configurator: every field filled, every registered tool listed. */
+export type DotConfig = {
+  identity: DotIdentity;
+  /** The dot's own instructions, given to the model with the persona. */
+  systemPrompt: string;
+  tools: Record<string, ToolSetting>;
+  sources: Source[];
+};
+
+/** What a ConfigStore keeps: only what the user changed. A missing field (or a null prompt) means the dot's default. */
+export type StoredConfig = {
+  identity?: Partial<DotIdentity>;
+  systemPrompt?: string;
+  tools?: Record<string, Partial<ToolSetting>>;
+  sources?: Source[];
+};
+
+/** Where the user's settings live. Memory by default (through Store); KV, a Durable Object or a file elsewhere. */
+export type ConfigStore = {
+  load(): Promise<StoredConfig | undefined>;
+  save(config: StoredConfig): Promise<void>;
+};
+
+/** A tool call held for the user's yes: what the approval card shows. `summary` is the call in a line; `expires` is ms since the epoch. */
+export type PendingApproval = { id: string; tool: string; args: Record<string, unknown>; summary: string; expires: number };
+
 /** What a speech provider gets to lock into a session server-side. */
 export type SessionSetup = {
   persona: string;
   tools: ToolDecl[];
+  /** The voice the user picked in the configurator, when they picked one. */
+  voice?: string;
 };
 
 export type VoiceProvider = {

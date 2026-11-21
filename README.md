@@ -44,11 +44,12 @@ Open http://127.0.0.1:8787/ for the screen. Voice needs a real
 ## The rules it enforces
 
 - **Tool kinds.** `read` (the default), `act`, `private`, `display` and `slow`.
-- **Acts need a read-back.** An act called without `confirmed` stores a receipt
-  for those exact arguments and returns a read-back (`text` to say word for word,
-  and a `say` instruction). `confirmed: true` runs only against a matching
-  receipt, once. A changed draft needs a new yes. Unless `live: true`, confirmed
-  acts dry-run. See [Act receipts](#act-receipts) for how it keeps models from looping.
+- **Each tool asks, runs or is refused, as the user set it.** `ask` (the default
+  for acts) holds the call and answers `pending_approval`; the screen draws an
+  approval card, and the call runs once, with the arguments it was held with,
+  when the user approves. `always` runs at once (the default for everything else);
+  `deny` never runs. Unless `live: true`, approved acts dry-run. See
+  [Approvals](#approvals).
 - **Demo mode by default.** Every tool result is scrubbed before the model sees it:
   secrets, emails, IPs and codenamed clients, plus amounts in demo mode.
   Private mode, acts and display results need an allowed login.
@@ -90,32 +91,84 @@ const page = screenRoutes({ name: "mine", packs: [places] });
 Static Maps on one key). Map images are served by the dot from ids `show_map`
 made, so the key stays on the server.
 
-## Act receipts
+## Approvals
 
-Models (Gemini Live especially) skip the unconfirmed call, read back in their own
-words, and retry with slightly reworded arguments. The server doesn't let that loop:
+Policy lives on the server, per tool, set by the user in the
+[configurator](#the-configurator) and never by the model:
 
-- **A confirmed call with no receipt doesn't run.** It stores a receipt for those
-  exact arguments and answers with the read-back, `say` starting "Not sent yet.
-  Read this exact text back and get a new yes". The next yes then matches.
-- **The yes must come after the read-back.** On a surface that knows its turns
-  (the chat loop sets `ctx.turn` per user message: the screen's typed chat,
-  Slack), a receipt is only accepted from an earlier turn. The voice screen
-  can't tell the server where a user turn starts (Live's transcriptions can land
-  after the tool call), so there a receipt is only accepted `gapMs` after it was
-  issued: default 4 s, shorter than a spoken read-back plus a spoken yes, longer
-  than a model calling straight back.
-- **Refusals are capped.** After `refusals` (default 2) refused confirmed calls
-  of one tool in one session, the next one answers with a final `STOP.` error:
-  stop, tell the user plainly it didn't go through and why, don't retry. The
-  tool stays off for that session (30 minutes); a new thread starts clean.
-- **The act prompt comes with the tools.** `capabilities` ends with the rules
-  (`ACT_RULES`) whenever a dot has an act: always call first without
-  `confirmed`, read the server's `text` word for word, never a paraphrase. Act
-  declarations get a described `confirmed` parameter if they leave it out.
+| setting | what a call does |
+|---|---|
+| `ask` | Held for the user's yes. The answer is `{ pending_approval: { id, tool, args, summary, expires }, say }`. The default for acts. |
+| `always` | Runs at once. The default for read, private, display and slow tools. |
+| `deny` | Refused with a 403, even if a held call is approved later. |
+
+A tool can also be turned off: it leaves the model's tools and persona, and a
+call is refused.
+
+- **The card.** On `pending_approval` the screen draws an inline card with the
+  tool, its arguments, and **Approve**, **Always approve** and **Cancel**. Each
+  posts `POST /api/approvals/<id>` with `{ "decision": "approve" | "always" | "deny" }`
+  as the signed-in user, who must be an allowed login and the one the call was held
+  for. The held call runs once (a second answer gets 404). `always` also sets the
+  tool to `always` in the ConfigStore. A held call expires after 10 minutes
+  (`approvals.ttlSeconds`). The same call made again in the session gets the
+  same approval back, not a second card.
+- **A spoken yes.** For hands-free use, when the user says yes the model calls
+  `confirm_action` with the approval's `id`. That approves once, never `always`,
+  and only for the same session and login. The user has to get a turn to answer
+  first: a later turn on surfaces that know their turns (typed chat, Slack), or
+  at least `approvals.gapMs` (default 4 s) on the voice screen. Nothing is read
+  back word for word: the card shows the arguments. `approvals.voice: false`
+  turns this off, so only the card can approve.
+- **The model is told the result.** On voice the screen tells the model what the
+  user chose on the card. Typed turns get it as a note at the start of their next turn.
+- **The rules come with the tools.** `capabilities` marks each tool that asks
+  `(needs a yes)` and ends with `ACT_RULES` while any tool asks. A `confirmed`
+  field left over from the old read-back flow is hidden from the model and
+  ignored. `receipts.gapMs` still sets `approvals.gapMs`.
 
 ```ts
-const dot = await defineDot({ /* ... */ receipts: { gapMs: 4000, refusals: 2 } });
+const dot = await defineDot({ /* ... */ approvals: { gapMs: 4000, ttlSeconds: 600, voice: true } });
+```
+
+## The configurator
+
+`screenRoutes` also serves a desktop configurator at `/config` (`configurator:
+false` leaves it out). It sets up the dot the user carries on their phone. It
+reads and writes `GET`/`PUT /api/config`, which only an allowed login can call,
+and only as JSON, so a form on another site can't post to it. Changes apply from
+the next turn or session, with no restart. Its tabs:
+
+- **Tools & approvals:** each tool on or off, and `ask` / `always` / `deny`.
+- **Identity & look:** name, icon (an https URL, a path on the site, or one of
+  `configurator.icons`), orb theme (a color, or one of `configurator.themes`),
+  voice (one of `voices` when the dot lists them) and default text model (a
+  `chatModels` id). The screen draws the name, icon and theme from
+  `GET /api/info`. The voice is locked into the next voice session's token.
+- **System prompt:** the dot's own instructions, with a mark for unsaved changes,
+  a line diff against what's saved, and **Reset to default** (`defaults.systemPrompt`).
+  The persona gets it as `prompt`, and it's added after the persona unless
+  the persona already includes it.
+- **Sources:** a list of JSON objects the dot gives meaning to (a Layer
+  namespace, a feed). The framework only keeps them. A dot reads them with
+  `dot.config()`.
+
+`?embed=1` drops the page's header, for a tab in another app's frame (the
+page allows same-origin frames only). Settings go through a `ConfigStore`
+(`{ load, save }`, beside `Store`, `TraceSink` and `Identity`). The default keeps
+them in the dot's `store` under `config`; `storeConfig(store, key)` and
+`memoryConfig()` are there for your own. Only what the user changed is stored.
+The rest comes from `defaults`. `PUT` takes any subset of `{ identity,
+systemPrompt, tools, sources }`, checks every value, and keeps all of it or
+none. `systemPrompt: null` resets it.
+
+```ts
+const dot = await defineDot({
+  /* ... */
+  defaults: { systemPrompt: "Keep answers short.", identity: { theme: "#e25822" } },
+  voices: ["Algenib", "Puck"],
+});
+const page = screenRoutes({ name: "mine", configurator: { icons: [{ label: "mine", src: "/icon.png" }] } });
 ```
 
 ## Threads
@@ -304,7 +357,7 @@ issue reports. Anything that isn't semver is ignored and the sha shows.
 
 ## Routes
 
-`GET /api/token`, `POST /api/tool`, `POST /api/chat`, `POST /api/trace`, `GET /api/job/<id>`, `GET /api/info`, `GET /api/threads`, `GET /api/threads/<id>`.
+`GET /api/token`, `POST /api/tool`, `POST /api/chat`, `POST /api/trace`, `GET /api/job/<id>`, `GET /api/info`, `GET /api/threads`, `GET /api/threads/<id>`, `POST /api/approvals/<id>`, `GET /api/config`, `PUT /api/config`.
 The prefix is `base` (default `/api`). Who is calling comes from the dot's
 `identity` adapter, never from the body.
 
@@ -316,7 +369,7 @@ tools and policy as voice. The body is JSON:
 | field | | |
 |---|---|---|
 | `text` | string | What the user said; trimmed, cut at 4000 characters. |
-| `session` | string | Required. 8 to 40 of `0-9a-f-` (a UUID works). The conversation's history and act receipts are kept per session. |
+| `session` | string | Required. 8 to 40 of `0-9a-f-` (a UUID works). The conversation's history and pending approvals are kept per session. |
 | `safe` | boolean | Demo mode unless exactly `false`. `false` needs an allowed login. |
 | `model` | string | Optional. An id from `chatModels`; left out, the default model answers. |
 | `images` | array | Optional. Up to four `{ mimeType, data, thumb? }`: JPEG, PNG or WebP, base64 without a `data:` prefix, under 5 MB each. |
@@ -332,14 +385,15 @@ object per line, streamed as the turn runs, ending with exactly one `reply` or
 ```
 {"slow":"deep_think"}                                   a slow tool started; say it's working
 {"display":{"card":{"title":"…"}},"name":"show_card"}  a display tool's result: a card, a link or an app to show
+{"approval":{"id":"…","tool":"log_time",…},"name":"log_time"}  a call held for a yes: draw the approval card
 {"reply":"Here's the plan."}                            the dot's answer; the stream ends
 {"error":"…"}                                           the turn failed; the stream ends
 ```
 
 The model sees only `{ shown: true }` for a display result, so the client must
-draw it. An act answers with a read-back in `reply`; the user's yes is the next
-turn in the same session, and the server checks it against the receipt. To
-forget a session, start a new `session` id.
+draw it. A call that asks first streams an `approval` line for the card; the
+user answers on the card, or says yes in the next turn of the same session (see
+[Approvals](#approvals)). To forget a session, start a new `session` id.
 
 ### `GET /api/info`
 
@@ -397,8 +451,8 @@ await slack({
 
 A thread is a session: after the first mention, replies in the thread reach the
 dot without another mention. Every tool call goes through the same policy as the
-voice screen, so an act reads back in the thread and runs only on a yes from a
-mapped user. The persona gets `surface: "slack"` to adjust its style.
+voice screen, so an act that asks waits in the thread and runs only on a yes
+from a mapped user, in a later message. The persona gets `surface: "slack"` to adjust its style.
 `clear` in a thread makes the dot forget it (`chat.clear(ctx)` on any text
 surface); a new thread is a new session anyway.
 
@@ -461,7 +515,7 @@ const calls = phone({
   onError: error => console.error(error),
 });
 
-// Call from a trusted server action, after the dot's normal read-back/yes policy.
+// Call from a trusted server action, after the dot's normal approval policy.
 const result = await calls.dial("+14155550101");
 // Your fetch router delegates POST /phone/answer and /phone/status:
 const route = (request: Request) => calls.handle(request);
@@ -529,7 +583,7 @@ voice connection. Display cards, links and apps remain available in text chat.
 Configure `chat` for a single adapter. For a picker, configure `chatModels`
 with public IDs mapped to real `ChatModel` adapters. `chat` is the default;
 without it, the first allowlisted adapter is the default. All choices use the
-same server tools, identity, redaction and act receipts. The screen obtains
+same server tools, identity, redaction and approvals. The screen obtains
 names and availability from `GET /api/info` and sends the selected ID with
 `POST /api/chat`; unknown IDs fail before model execution. Provider keys stay
 on the server. Adapter names should report verified provider model identifiers.
@@ -538,6 +592,7 @@ been verified. In particular, a consumer requesting Opus 5.5 must verify its
 provider identifier and availability in its own deployment; the framework
 supplies no invented alias or substitute provider.
 
-Existing consumers using `chat`, `screenRoutes`, display tools and act receipts
-need no configuration migration. Text chat without an adapter reports
+Existing consumers using `chat`, `screenRoutes` and display tools need no
+configuration migration. Acts that declared `confirmed` keep working: the
+field is hidden from the model and ignored. Text chat without an adapter reports
 unavailability. Voice remains an explicit optional path.

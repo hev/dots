@@ -1,4 +1,4 @@
-import type { Store, TraceSink } from "./types.ts";
+import type { ConfigStore, Store, StoredConfig, TraceSink } from "./types.ts";
 
 /** In-process store with expiry. Fine for one Node process; use KV or a Durable Object on Workers. */
 export function memoryStore(): Store {
@@ -29,4 +29,24 @@ export function memorySink(): TraceSink & { lines: Map<string, unknown[]> } {
     lines.set(session, [...(lines.get(session) ?? []), ...ls]);
   };
   return Object.assign(sink, { lines });
+}
+
+/**
+ * The user's settings kept in a Store under one key, with no expiry. The default: a dot
+ * with no ConfigStore of its own keeps its settings wherever its Store keeps things.
+ */
+export function storeConfig(store: Store, key = "config"): ConfigStore {
+  return {
+    async load() {
+      return (await store.get(key)) as StoredConfig | undefined;
+    },
+    async save(config) {
+      await store.put(key, config);
+    },
+  };
+}
+
+/** Settings in memory, for tests and local runs. */
+export function memoryConfig(): ConfigStore {
+  return storeConfig(memoryStore());
 }

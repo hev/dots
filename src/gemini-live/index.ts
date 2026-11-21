@@ -37,7 +37,7 @@ export function liveSetup(o: GeminiLiveOptions, setup: SessionSetup) {
     model: o.model ?? "models/gemini-3.8-live",
     generationConfig: {
       responseModalities: ["AUDIO"],
-      speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: o.voice ?? "Algenib" } } },
+      speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: setup.voice || o.voice || "Algenib" } } },
     },
     systemInstruction: { parts: [{ text: setup.persona }] },
     tools: [{ functionDeclarations: declarations(setup.tools) }],

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { screen, screenRoutes } from "../src/client/index.ts";
+import { configurator, screen, screenRoutes } from "../src/client/index.ts";
 
 const icons = { any192: "/icon-192.png", any512: "/icon.png", maskable512: "/icon-maskable.png" };
 
@@ -402,4 +402,141 @@ test("typing cancels an outstanding voice token request", async () => {
   release({ json: async () => ({ token: "t", model: "m" }) });
   await b.tick();
   assert.equal(sockets.length, 0);
+});
+
+// Approvals on the screen: the card the server's pending_approval draws, and its three buttons.
+function approvalScreen(answers: (decision: string) => { status: number; body: unknown } | Error) {
+  const posts: { url: string; headers: Record<string, string>; body: any }[] = [];
+  const fetch = async (url: string, init: any = {}) => {
+    if (url.includes("/approvals/")) {
+      const body = JSON.parse(init.body);
+      posts.push({ url, headers: init.headers, body });
+      const a = answers(body.decision);
+      if (a instanceof Error) throw a;
+      return { ok: a.status < 400, status: a.status, json: async () => a.body };
+    }
+    if (url.endsWith("/tool")) return { ok: true, status: 200, json: async () => ({ pending_approval: card("aaaaaaaa-0000-0000-0000-000000000001"), say: "waiting" }) };
+    return { ok: false, status: 404, json: async () => ({}) };
+  };
+  const b = boot({ name: "me", labels: { log_time: "log time" } }, { fetch });
+  const cards = () => b.$("#conversation").children.filter((c: any) => c.className === "m approval");
+  const parts = (c: any) => ({ title: c.children[0].text, sum: c.children[1].text, buttons: c.children[2].children, status: c.children[3] });
+  return { b, posts, cards, parts };
+}
+const card = (id: string, args: Record<string, unknown> = { duration: "1h" }) => ({ id, tool: "log_time", args, summary: "log time · duration: 1h", expires: Date.now() + 60000 });
+
+test("a tool call answered pending_approval draws an inline card with Approve, Always approve and Cancel", async () => {
+  const { b, cards, parts } = approvalScreen(() => ({ status: 200, body: {} }));
+  await b.ctx.tools([{ id: "c1", name: "log_time", args: { duration: "1h" } }]);
+  assert.equal(cards().length, 1);
+  const p = parts(cards()[0]);
+  assert.equal(p.title, "Approve log time?");
+  assert.equal(p.sum, "duration: 1h");
+  assert.deepEqual(p.buttons.map((x: any) => [x.text, x.dataset.d]), [["Approve", "approve"], ["Always approve", "always"], ["Cancel", "deny"]]);
+  b.ctx.showApproval(card("aaaaaaaa-0000-0000-0000-000000000001"));
+  assert.equal(cards().length, 1, "the same approval isn't drawn twice");
+});
+
+test("Approve posts the decision as JSON and the card settles once", async () => {
+  const { b, posts, cards, parts } = approvalScreen((d) => ({ status: 200, body: { id: "x", tool: "log_time", decision: d, result: { logged: "1h" } } }));
+  b.ctx.showApproval(card("aaaaaaaa-0000-0000-0000-00000000000a"));
+  const c = cards()[0];
+  await parts(c).buttons[0].onclick();
+  assert.equal(posts.length, 1);
+  assert.match(posts[0].url, /\/api\/approvals\/aaaaaaaa-0000-0000-0000-00000000000a$/);
+  assert.equal(posts[0].headers["content-type"], "application/json");
+  assert.deepEqual(posts[0].body, { decision: "approve" });
+  assert.equal(parts(c).status.text, "Approved. Done.");
+  assert.ok(c.classList.contains("done"));
+  assert.ok(parts(c).buttons.every((x: any) => x.disabled));
+  await parts(c).buttons[0].onclick();
+  assert.equal(posts.length, 1, "a settled card doesn't post again");
+});
+
+test("Always approve and Cancel say what happened", async () => {
+  const { b, posts, cards, parts } = approvalScreen((d) => ({ status: 200, body: d === "deny" ? { decision: d, cancelled: true } : { decision: d, result: { logged: "1h" } } }));
+  b.ctx.showApproval(card("aaaaaaaa-0000-0000-0000-00000000000b"));
+  b.ctx.showApproval(card("aaaaaaaa-0000-0000-0000-00000000000c"));
+  const [one, two] = cards();
+  await parts(one).buttons[1].onclick();
+  await parts(two).buttons[2].onclick();
+  assert.deepEqual(posts.map((x) => x.body.decision), ["always", "deny"]);
+  assert.match(parts(one).status.text, /from now on it runs without asking/);
+  assert.match(parts(two).status.text, /^Cancelled/);
+});
+
+test("a refused or expired approval shows why; a lost connection lets you try again", async () => {
+  let next: { status: number; body: unknown } | Error = { status: 403, body: { error: "log_time is refused by the user's settings" } };
+  const { b, posts, cards, parts } = approvalScreen(() => next);
+  b.ctx.showApproval(card("aaaaaaaa-0000-0000-0000-00000000000d"));
+  b.ctx.showApproval(card("aaaaaaaa-0000-0000-0000-00000000000e"));
+  b.ctx.showApproval(card("aaaaaaaa-0000-0000-0000-00000000000f"));
+  const [refused, gone, offline] = cards();
+  await parts(refused).buttons[0].onclick();
+  assert.match(parts(refused).status.text, /refused by the user's settings/);
+  assert.ok(refused.classList.contains("err"));
+  next = { status: 404, body: { error: "no such approval waiting" } };
+  await parts(gone).buttons[0].onclick();
+  assert.match(parts(gone).status.text, /No longer waiting/);
+  next = new Error("offline");
+  await parts(offline).buttons[0].onclick();
+  assert.match(parts(offline).status.text, /Try again/);
+  assert.ok(parts(offline).buttons.every((x: any) => !x.disabled), "buttons come back");
+  next = { status: 200, body: { decision: "approve", result: { logged: "1h" } } };
+  await parts(offline).buttons[0].onclick();
+  assert.equal(parts(offline).status.text, "Approved. Done.");
+  assert.equal(posts.length, 4);
+});
+
+test("a spoken yes the model relays through confirm_action settles the card too", async () => {
+  const { b, cards, parts } = approvalScreen(() => ({ status: 200, body: {} }));
+  b.ctx.showApproval(card("aaaaaaaa-0000-0000-0000-000000000001"));
+  b.ctx.fetch = async () => ({ ok: true, status: 200, json: async () => ({ id: "aaaaaaaa-0000-0000-0000-000000000001", tool: "log_time", decision: "approve", result: { logged: "1h" } }) });
+  await b.ctx.tools([{ id: "c2", name: "confirm_action", args: { id: "aaaaaaaa-0000-0000-0000-000000000001" } }]);
+  assert.equal(parts(cards()[0]).status.text, "Approved. Done.");
+});
+
+test("typed turns draw the card from the stream, and the screen takes the configured look from info", () => {
+  const html = screen({ name: "me" });
+  assert.match(html, /if\(m\.approval\) showApproval\(m\.approval\)/);
+  assert.match(html, /look\(i\.identity\)/);
+});
+
+test("the name, icon and theme set in the configurator are drawn on the screen; bad values aren't", async () => {
+  const info = (identity: unknown) => async (url: string) => (url.endsWith("/info") ? { ok: true, status: 200, json: async () => ({ identity, models: [] }) } : { ok: false, status: 404, json: async () => ({}) });
+  const b = boot({ name: "me" }, { fetch: info({ name: "Pip", icon: "https://example.com/pip.png", theme: "#336699" }) });
+  const props: Record<string, string> = {};
+  b.doc.documentElement.style.setProperty = (k: string, v: string) => void (props[k] = v);
+  await b.tick(); await b.tick();
+  assert.equal(b.doc.title, "Pip");
+  assert.match(b.$(".wm").innerHTML, /^Pip<span class="cur">/);
+  assert.equal(props["--sig"], "#336699");
+  const bad = boot({ name: "me" }, { fetch: info({ name: "me", icon: "javascript:alert(1)", theme: "red;}" }) });
+  const set: string[] = [];
+  bad.doc.documentElement.style.setProperty = (k: string) => void set.push(k);
+  await bad.tick(); await bad.tick();
+  assert.deepEqual(set, []);
+  assert.equal(bad.$(".wm").innerHTML, "");
+});
+
+test("the configurator is served at /config with the screen, and can be left out", async () => {
+  const route = screenRoutes({ name: "me" });
+  const r = route(new Request("https://me.example/config"))!;
+  assert.equal(r.headers.get("content-type"), "text/html; charset=utf-8");
+  assert.equal(r.headers.get("x-frame-options"), "SAMEORIGIN");
+  const html = await r.text();
+  assert.match(html, /<title>me · settings<\/title>/);
+  for (const tab of ["Tools &amp; approvals", "Identity &amp; look", "System prompt", "Sources"]) assert.ok(html.includes(tab), tab);
+  assert.match(html, /Reset to default/);
+  assert.equal(screenRoutes({ name: "me", configurator: false })(new Request("https://me.example/config")), null);
+  assert.equal(route(new Request("https://me.example/config", { method: "PUT" })), null, "PUT goes on to the dot's /api/config");
+});
+
+test("the configurator's script parses, and its options can't close the script tag", () => {
+  const html = configurator({ name: "me", icons: [{ label: "</script><script>alert(1)", src: "/a.png" }, { label: "bad", src: "javascript:x" }], themes: [{ label: "x", color: "red" }] });
+  assert.equal(html.split("</script>").length, 2);
+  const js = html.slice(html.indexOf("<script>") + 8, html.lastIndexOf("</script>"));
+  assert.doesNotThrow(() => new Function(js));
+  assert.doesNotMatch(html, /javascript:x/);
+  assert.doesNotMatch(html, /"color":"red"/);
 });
