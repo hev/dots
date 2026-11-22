@@ -7,6 +7,12 @@
 // poll /api/job; display tools ({url, label}) put a link on screen and the model
 // hears only that it's up. The name, icon and orb theme the user set in the
 // configurator (/config, see configurator.ts) come from /api/info.
+// The page is in one of two modes. Chat (the default) is the conversation, a compact
+// Voice button and the composer; a typed turn shows a thinking bubble until its reply.
+// Voice mode (body.voice-mode, on from the tap until voice stops for any reason) is
+// the big orb, what was heard and said under it, and a Chat button back; voice turns
+// still land in the conversation underneath, and the typed turns before it go to the
+// Live session as context once, so voice picks up the thread.
 // Typed questions are answered in text (POST /chat, when the dot has a text
 // model), so typing never wakes the voice. The header is ☰, the wordmark, the
 // mode lock and "i". "i" opens info: the dot's tools, the inbox it reads, the log
@@ -158,6 +164,7 @@ ${o.design?.decor ? `<div id="decor" aria-hidden="true">${o.design.decor}</div>`
   <main>
     <button id="dot" aria-label="Start voice"><span class="voiceLabel">Voice</span><span id="halo"></span>${o.orb ? `<img id="core" class="art" src="${esc(o.orb)}" alt="">` : `<span id="core"></span>`}</button>
     <div id="status" role="status">Ready to chat</div>
+    <button id="toChat" aria-label="Back to chat" title="back to chat">Chat</button>
     <section id="conversation" role="log" aria-label="Conversation" tabindex="0" aria-live="polite"></section>
     <div id="you"></div><div id="say"></div>
     <div id="chips"></div><div id="links"></div>
@@ -313,7 +320,25 @@ button:focus-visible,textarea:focus-visible,select:focus-visible{outline:2px sol
 .approval .btns .ap-approve{background:var(--sig);border-color:var(--sig);color:#fff;font-weight:600}
 .approval .btns button:disabled{opacity:.45;cursor:default}.approval .st{font:12px var(--mono);color:var(--muted);margin-top:6px}.approval .st:empty{display:none}
 .approval.done .btns{display:none}.approval.err .st{color:#c0392b}
-@media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}}
+/* the thinking bubble: three dots and what it's doing, while a typed turn is out */
+#conversation .m.thinking{display:flex;align-items:center;gap:10px;color:var(--muted);white-space:normal}
+.thinking .dots{display:inline-flex;gap:4px;flex:none}.thinking .dots i{width:7px;height:7px;border-radius:50%;background:var(--sig);animation:think 1.2s ease-in-out infinite}
+.thinking .dots i:nth-child(2){animation-delay:.15s}.thinking .dots i:nth-child(3){animation-delay:.3s}
+@keyframes think{0%,80%,100%{opacity:.25;transform:scale(.75)}40%{opacity:1;transform:none}}
+/* voice mode: the big glowing orb in the middle, what was heard and said under it; the chat waits underneath */
+#toChat{display:none}
+body.voice-mode main{justify-content:safe center;align-items:center;gap:14px;overflow:auto}
+body.voice-mode #dot{width:150px;height:150px;align-self:center}
+body.voice-mode .voiceLabel{display:none}
+body.voice-mode #dot #halo{inset:0;width:auto}
+body.voice-mode #dot #core{inset:30px;width:auto}
+body.voice-mode #dot #core.art{inset:30px;width:90px;height:90px}
+body.voice-mode #conversation:not(:has(>.approval:not(.done))){display:none}
+body.voice-mode #conversation{flex:none;width:100%;max-height:40dvh}
+body.voice-mode #conversation>:not(.approval:not(.done)){display:none}
+body.voice-mode #you,body.voice-mode #say{display:block;width:100%}
+body.voice-mode #toChat{display:inline-flex;min-height:40px;align-items:center;color:var(--muted)}
+@media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}.thinking .dots i{opacity:.6}}
 `;
 
 // Plain browser JS. CFG comes from the server. Kept in step with hev dot's
@@ -326,6 +351,8 @@ const keep=(k,v)=>{try{if(v===undefined)return localStorage[k];localStorage[k]=v
 const label=n=>CFG.labels[n]||n.replace(/_/g,' ');
 function toast(m){ const t=$('#toast'); t.textContent=m; t.classList.add('on'); clearTimeout(t._h); t._h=setTimeout(()=>t.classList.remove('on'),3500); }
 let ws=null, ready=false, handle=null, wantMic=true, micOpen=false, sayText='', youText='', wake=null, busy=0, gen=0;
+/* typed turns since the last handoff to a Live session, so voice picks up the thread */
+let typed=[];
 
 /* demo vs private: the person's pick, else the dot's defaultMode. The server refuses private mode to anyone not allowed.
    Typed turns read the mode as they go; a Live session is locked to its token, so a switch starts it again in the new
@@ -475,23 +502,28 @@ async function start({mic=true,quiet=false}={}){ const epoch=voiceEpoch; wantMic
     ws.onopen=()=>sock.send(JSON.stringify({setup:{model:tk.model,...(handle?{sessionResumption:{handle}}:{})}}));
     ws.onmessage=async ev=>{ if(ws===sock) onMsg(JSON.parse(typeof ev.data==='string'?ev.data:await ev.data.text())); };
     /* an old socket closing late (after a mode switch or a reconnect) must not take the new one with it */
-    ws.onclose=e=>{ if(ws&&ws!==sock) return; const was=!!ws; ws=null; ready=false; dot.classList.remove('on','connecting'); stopMic(); wake?.release?.(); wake=null; micOpen=false;
-      status(e.code===1000?'tap to talk':'disconnected · tap to reconnect'); if(e.code!==1000&&was){ log('t','session closed '+e.code+(e.reason?' · '+e.reason:'')); ear.error(); emit('error'); playCue('lost'); } };
-  }catch(e){ dot.classList.remove('connecting'); status('Ready to chat'); toast('Couldn’t wake '+CFG.name+': '+e.message); ws=null; ear.error(); wakingCue.then(()=>playCue('unreachable')); }
+    /* a socket we closed ourselves (stop, a mode switch, goAway) is retired: its late close changes nothing */
+    ws.onclose=e=>{ if(sock.retired||(ws&&ws!==sock)) return; const was=!!ws; ws=null; ready=false; dot.classList.remove('on','connecting'); stopMic(); wake?.release?.(); wake=null; micOpen=false;
+      voiceEnabled=false; voiceMode(false);
+      status(e.code===1000?'Ready to chat':'disconnected · tap Voice to reconnect'); if(e.code!==1000&&was){ log('t','session closed '+e.code+(e.reason?' · '+e.reason:'')); ear.error(); emit('error'); playCue('lost'); } };
+  }catch(e){ if(epoch!==voiceEpoch) return; dot.classList.remove('connecting'); voiceEnabled=false; voiceMode(false); status('Ready to chat'); toast('Couldn’t wake '+CFG.name+': '+e.message); ws=null; ear.error(); wakingCue.then(()=>playCue('unreachable')); }
 }
-function stop({bye=false}={}){ voiceEpoch++; stopMic(); ready=false; $('#dot').setAttribute('aria-label','Start voice'); $('#dot').classList.remove('on','connecting'); wake?.release?.(); wake=null; if(ws){ const w=ws; ws=null; w.close(1000); if(bye){ playCue('bye'); emit('bye'); } } micOpen=false; flush(); }
+function stop({bye=false}={}){ voiceEpoch++; stopMic(); ready=false; $('#dot').setAttribute('aria-label','Start voice'); $('#dot').classList.remove('on','connecting'); wake?.release?.(); wake=null; if(ws){ const w=ws; ws=null; w.retired=true; w.close(1000); if(bye){ playCue('bye'); emit('bye'); } } micOpen=false; flush(); }
 async function onMsg(m){
-  if(m.setupComplete){ $('#dot').setAttribute('aria-label','Stop voice'); ready=true; $('#dot').classList.remove('connecting'); $('#dot').classList.add('on');
-    wake=await navigator.wakeLock?.request('screen').catch(()=>null);
-    const mic=micStream?true:wantMic?await startMic().catch(e=>{ toast('Mic: '+e.message); return false; }):false;
-    if(mic&&!quietStart){ await wakingCue; await playCue('ready'); }  // only then open the mic, so it doesn't hear itself
+  if(m.setupComplete){ const w=ws; $('#dot').setAttribute('aria-label','Stop voice'); ready=true; $('#dot').classList.remove('connecting'); $('#dot').classList.add('on');
+    const wl=await navigator.wakeLock?.request('screen').catch(()=>null); if(ws!==w){ wl?.release?.(); return; } wake=wl;
+    const mic=micStream?true:wantMic?await startMic().catch(e=>{ toast('Mic: '+e.message); return false; }):false; if(ws!==w) return;
+    if(mic&&!quietStart){ await wakingCue; await playCue('ready'); if(ws!==w) return; }  // only then open the mic, so it doesn't hear itself
     micOpen=true; if(!mic&&wantMic) status('typing only'); emit('ready');
-    if(resumed&&resumed.sid===SID&&!resumed.told){ resumed.told=true; greeted=SID; context(resumed.lines); }
+    /* once per handoff: a resumed thread's last lines and the typed turns since the last Live session */
+    const lines=[]; if(resumed&&resumed.sid===SID&&!resumed.told){ resumed.told=true; lines.push(...resumed.lines); }
+    if(typed.length){ lines.push(...typed); typed=[]; }
+    if(lines.length){ greeted=SID; context(lines); }
     if(pending.length) photosToLive('');
     else if(CFG.greeting&&greeted!==SID&&!quietStart){ greeted=SID; emit('greet'); note(CFG.greeting); }
     return; }
   if(m.sessionResumptionUpdate?.newHandle) handle=m.sessionResumptionUpdate.newHandle;
-  if(m.goAway){ log('t','reconnecting'); playCue('reconnect'); const w=ws; ws=null; w?.close(1000); return start({mic:wantMic,quiet:true}); }
+  if(m.goAway){ log('t','reconnecting'); playCue('reconnect'); const w=ws; ws=null; if(w) w.retired=true; w?.close(1000); return start({mic:wantMic,quiet:true}); }
   if(m.toolCall) return tools(m.toolCall.functionCalls||[]);
   const sc=m.serverContent; if(!sc) return;
   if(sc.interrupted){ flush(); finishSay(); }
@@ -581,26 +613,46 @@ function awaitJob(fc,id){ const t0=Date.now(), g=gen; busy++;
   setTimeout(tick,3000); }
 
 const goFull=()=>{ if(!document.fullscreenElement&&!matchMedia('(display-mode: standalone), (display-mode: fullscreen)').matches) document.documentElement.requestFullscreen?.({navigationUI:'hide'}).catch(()=>{}); };
-$('#dot').onclick=async()=>{ if($('#dot').classList.contains('connecting')){ stop(); voiceEnabled=false; status('Ready to chat'); return; } voiceEnabled=true; if(ws&&ready&&!micStream){ wantMic=true; await startMic().catch(e=>{ toast('Mic: '+e.message); }); }
-  else if(ws){ stop({bye:true}); status('Ready to chat'); } else { goFull(); $('#you').textContent=''; $('#say').textContent=''; start(); } };
+/* voice mode: on while voice is connecting or connected, off the moment it stops for any reason */
+function voiceMode(on){ document.body.classList.toggle('voice-mode',on); $('#dot').setAttribute('aria-label',on?'Stop voice':'Start voice');
+  if(!on) $('#conversation').scrollTop=1e9; }
+/* back to chat: voice stops, the mic and socket go, and the conversation (voice turns included) is back */
+function toChat({bye=false}={}){ stop({bye}); voiceEnabled=false; voiceMode(false); status('Ready to chat'); }
+$('#toChat').onclick=()=>{ toChat({bye:true}); $('#type').focus?.(); };
+$('#dot').onclick=async()=>{
+  if(ws||$('#dot').classList.contains('connecting')||document.body.classList.contains('voice-mode')){ toChat({bye:!!ws}); return; }
+  /* a typed turn still out is superseded by voice */
+  if(thinkingEl){ gen++; unthink(); }
+  voiceEnabled=true; voiceMode(true); goFull(); $('#you').textContent=''; $('#say').textContent=''; start(); };
 /* text mode: a typed question gets a typed answer, from the server's chat loop.
    Voice stops, so nothing talks over the page. The server traces these turns itself. */
 
-async function ask(t){ voiceEnabled=false; stop(); sfx?.close?.(); sfx=null; const g=gen;
+/* the thinking bubble: in the conversation while a typed turn is out, saying what it's doing */
+let thinkingEl=null;
+function think(){ unthink(); const d=document.createElement('div'); d.className='m d thinking'; d.setAttribute('role','status'); d.setAttribute('aria-label','Assistant is thinking');
+  const dots=document.createElement('span'); dots.className='dots'; dots.setAttribute('aria-hidden','true'); for(let i=0;i<3;i++) dots.append(document.createElement('i'));
+  const l=document.createElement('span'); l.className='lbl'; l.textContent='Thinking…'; d.append(dots,l); d._label=l;
+  $('#conversation').append(d); $('#conversation').scrollTop=1e9; return thinkingEl=d; }
+function thinking(text){ if(thinkingEl) thinkingEl._label.textContent=text; }
+function unthink(el=thinkingEl){ if(!el) return; el.remove(); if(thinkingEl===el) thinkingEl=null; }
+async function ask(t){ const ref={}; try{ return await turn(t,ref); } finally{ unthink(ref.th); } }
+async function turn(t,ref){ voiceEnabled=false; stop(); voiceMode(false); sfx?.close?.(); sfx=null; const g=gen;
   const ps=pending; pending=[]; drawPending();
   const urls=ps.map(p=>p.thumb); showU(t,urls); youSaid(t,urls); $('#say').textContent='…'; status('thinking…');
+  const mine=$('#conversation').lastChild, th=ref.th=think();
   let res; try{ res=await fetch(API+'/chat',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({text:t,session:SID,safe:demo,...(selectedModel?{model:selectedModel}:{}),...(ps.length?{images:ps.map(p=>({mimeType:p.mimeType,data:p.data,thumb:p.thumb}))}:{})})}); }
   catch(e){ throw new Error('Couldn’t reach '+CFG.name+': '+e.message); }
-  if(res.status===403&&!demo){ refusedPrivate(); pending=ps.concat(pending); drawPending(); $('#list').lastChild?.remove(); return ask(t); }
+  if(res.status===403&&!demo){ refusedPrivate(); pending=ps.concat(pending); drawPending(); $('#list').lastChild?.remove(); unthink(th); mine?.remove(); return turn(t,ref); }
   if(!res.ok){ pending=ps.concat(pending); drawPending(); throw new Error(res.status===404?'Text chat is unavailable. Voice is available only with Start voice.':'Chat failed ('+res.status+'). Try again.'); }
   const rd=res.body.getReader(), dec=new TextDecoder(); let buf='', chips=[], replied=false;
   for(;;){ const {value,done}=await rd.read(); if(g!==gen) return true; if(done) break; buf+=dec.decode(value,{stream:true});
     let i; while((i=buf.indexOf('\n'))>=0){ const line=buf.slice(0,i); buf=buf.slice(i+1); if(!line.trim()) continue; const m=JSON.parse(line);
-      if(m.slow){ status('asking a sub-agent…'); const c=document.createElement('span'); c.className='chip'; c.textContent='⟳ '+label(m.slow); $('#chips').append(c); chips.push(c); }
+      if(m.slow){ status('asking a sub-agent…'); thinking('Checking '+label(m.slow)+'…'); const c=document.createElement('span'); c.className='chip'; c.textContent='⟳ '+label(m.slow); $('#chips').append(c); chips.push(c); }
       if(m.display){ if(m.display.card) showCard(m.display.card); else if(m.display.url) showLink(m.display.url,m.display.label); else if(m.display.app) openApp(m.display.app); else if(m.display.close_app) closeApp(); }
       if(m.approval) showApproval(m.approval);
       if(m.error){ chips.forEach(c=>c.remove()); throw new Error(m.error); }
-      if(typeof m.reply==='string'){ replied=true; $('#say').textContent=m.reply; show('d',m.reply); } } }
+      if(typeof m.reply==='string'){ replied=true; unthink(th); $('#say').textContent=m.reply; show('d',m.reply);
+        typed.push({k:'u',text:t,...(urls.length?{photos:urls}:{})},{k:'d',text:m.reply}); } } }
   chips.forEach(c=>c.remove()); if(!replied) throw new Error('The reply was interrupted. Try again.'); status('Ready to chat'); return true; }
 
 /* photos: from the camera roll or the camera, shrunk on the phone, then sent to the voice session or with the next typed turn */
@@ -627,7 +679,7 @@ $('#photo').onchange=async e=>{ const files=[...e.target.files].slice(0,4-pendin
   drawPending(); if(ws&&ready&&pending.length) photosToLive($('#type').value.trim()||''); };
 
 /* switching session: the old one's trace ships; everything on screen and in the Live session goes */
-function reset(sid){ ship(false); gen++; busy=0; stop(); handle=null; apps.close(); resumed=null; cards.clear();
+function reset(sid){ ship(false); gen++; busy=0; stop(); voiceEnabled=false; voiceMode(false); unthink(); typed=[]; handle=null; apps.close(); resumed=null; cards.clear();
   SID=sid||newSid(); T0=Date.now(); trace=[]; seq=0;
   for(const s of ['#conversation','#list','#links','#chips','#you','#say','#logStats']) $(s).textContent='';
   markStart(); closeLog(); status('Ready to chat'); }

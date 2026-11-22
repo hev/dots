@@ -141,6 +141,99 @@ async function preview() {
       } finally { await browser.close(); }
       return "desktop/mobile text reply, multiline input, model selection, recoverable failure, reload: zero audio/media/mic/WS";
     });
+    await check("browser: phone voice mode is the centered orb; Chat, the orb and a typed turn go back to chat with voice turns kept; thinking bubble", async () => {
+      const { chromium } = await playwright();
+      const b = await chromium.launch();
+      try {
+        const p = await b.newPage({ viewport: { width: 390, height: 800 } });
+        const errors = [];
+        p.on("pageerror", (e) => errors.push(String(e)));
+        // A stand-in Live socket (the fixture has no voice): it opens, answers setup, and the test drives its turns.
+        await p.addInitScript(() => {
+          window.__socks = [];
+          window.WebSocket = class {
+            constructor(url) { this.url = url; this.sent = []; this.readyState = 0; window.__socks.push(this); setTimeout(() => { this.readyState = 1; this.onopen?.(); }, 10); }
+            send(s) { this.sent.push(s); if (s.includes('"setup"')) setTimeout(() => this.push({ setupComplete: {} }), 10); }
+            push(m) { this.onmessage?.({ data: JSON.stringify(m) }); }
+            close(code) { this.readyState = 3; setTimeout(() => this.onclose?.({ code }), 10); }
+          };
+          if (navigator.mediaDevices) navigator.mediaDevices.getUserMedia = async () => { throw new Error("no mic in UAT"); };
+        });
+        await p.route("**/api/token*", (r) => r.fulfill({ contentType: "application/json", body: JSON.stringify({ token: "uat", model: "uat-live" }) }));
+        // /chat answers only when the test lets it, so the thinking bubble can be seen in flight
+        let hold = null;
+        await p.route("**/api/chat", async (r) => { if (hold) await hold.promise; return r.fallback(); });
+        const gate = () => { let open; const promise = new Promise((ok) => (open = ok)); hold = { promise, open }; return hold; };
+        await p.goto(base + "/");
+        // Thinking bubble: in the conversation while /chat is out, gone with the reply
+        let g = gate();
+        await p.fill("#type", "typed before voice");
+        await p.press("#type", "Enter");
+        await p.waitForSelector("#conversation .m.d.thinking");
+        expect((await p.textContent("#conversation .thinking")).includes("Thinking…"), "bubble says Thinking…");
+        expect(await p.evaluate(() => { const c = document.querySelector("#conversation"), t = c.querySelector(".thinking").getBoundingClientRect(), r = c.getBoundingClientRect(); return t.bottom <= r.bottom + 1 && t.top >= r.top - 1; }), "bubble scrolled into view");
+        mkdirSync(dir, { recursive: true });
+        await p.screenshot({ path: join(dir, "thinking-390.png") });
+        g.open(); hold = null;
+        await p.waitForFunction(() => document.querySelector("#conversation").textContent.includes("You said: typed before voice"));
+        expect(!(await p.isVisible("#conversation .thinking")), "bubble gone with the reply");
+        // ... and gone on an error, with the draft kept
+        g = gate();
+        await p.route("**/api/chat", async (r) => { if (hold) await hold.promise; return r.fulfill({ status: 503, body: "unavailable" }); });
+        await p.fill("#type", "this one fails");
+        await p.press("#type", "Enter");
+        await p.waitForSelector("#conversation .thinking");
+        g.open(); hold = null;
+        await p.waitForFunction(() => !document.querySelector("#conversation .thinking") && document.querySelector("#type").value === "this one fails");
+        await p.unroute("**/api/chat");
+        await p.fill("#type", "");
+        // Voice mode: the 150px orb in the middle, the chat hidden, what was heard and said under it
+        expect(!(await p.evaluate(() => document.body.classList.contains("voice-mode"))), "chat by default");
+        await p.click("#dot");
+        await p.waitForFunction(() => document.body.classList.contains("voice-mode") && document.querySelector("#dot").classList.contains("on"));
+        await p.evaluate(() => { const s = window.__socks.at(-1); s.push({ serverContent: { inputTranscription: { text: "what is on today" } } }); s.push({ serverContent: { outputTranscription: { text: "Two meetings and a walk." }, turnComplete: true } }); });
+        const orb = await p.evaluate(() => { const d = document.querySelector("#dot").getBoundingClientRect(), m = document.querySelector("main").getBoundingClientRect(), c = document.querySelector("#core").getBoundingClientRect(); return { w: d.width, h: d.height, off: Math.abs(d.left + d.width / 2 - (m.left + m.width / 2)), core: c.width, label: getComputedStyle(document.querySelector(".voiceLabel")).display }; });
+        expect(Math.abs(orb.w - 150) <= 2 && Math.abs(orb.h - 150) <= 2, "orb is 150px: " + JSON.stringify(orb));
+        expect(orb.off <= 2, "orb is centered: " + JSON.stringify(orb));
+        expect(Math.abs(orb.core - 90) <= 2 && orb.label === "none", "glowing core, no label: " + JSON.stringify(orb));
+        expect(!(await p.isVisible("#conversation")), "conversation hidden in voice mode");
+        expect(await p.isVisible("#you") && await p.isVisible("#say"), "#you and #say visible under the orb");
+        expect((await p.textContent("#say")) === "Two meetings and a walk.", "#say shows the spoken reply");
+        expect(await p.isVisible("#toChat"), "a Chat button back");
+        const sent = await p.evaluate(() => window.__socks.at(-1).sent.join("\n"));
+        expect(sent.includes("typed before voice") && sent.includes("You said: typed before voice"), "typed turns handed to Live as context");
+        expect(await p.evaluate(() => document.documentElement.scrollWidth <= innerWidth), "no horizontal overflow in voice mode");
+        await p.screenshot({ path: join(dir, "voice-mode-390.png") });
+        // Chat: back to the conversation, voice turns kept, a late close changes nothing
+        await p.click("#toChat");
+        await p.waitForTimeout(60);
+        expect(!(await p.evaluate(() => document.body.classList.contains("voice-mode"))), "Chat leaves voice mode");
+        expect(await p.evaluate(() => window.__socks.at(-1).readyState === 3), "socket closed");
+        expect(await p.isVisible("#conversation") && !(await p.isVisible("#you")), "conversation back");
+        const thread = await p.textContent("#conversation");
+        expect(thread.includes("what is on today") && thread.includes("Two meetings and a walk.") && thread.includes("typed before voice"), "voice and typed turns all in the thread");
+        await p.screenshot({ path: join(dir, "voice-back-to-chat-390.png") });
+        // The orb: tap in, tap out
+        await p.click("#dot");
+        await p.waitForFunction(() => document.querySelector("#dot").classList.contains("on"));
+        await p.click("#dot");
+        await p.waitForTimeout(60);
+        expect(!(await p.evaluate(() => document.body.classList.contains("voice-mode"))), "the orb stops voice");
+        // A typed turn from voice mode: back to chat with its reply
+        await p.click("#dot");
+        await p.waitForFunction(() => document.body.classList.contains("voice-mode"));
+        await p.fill("#type", "typed from voice");
+        await p.press("#type", "Enter");
+        await p.waitForFunction(() => document.querySelector("#conversation").textContent.includes("You said: typed from voice"));
+        await p.waitForTimeout(60);
+        expect(!(await p.evaluate(() => document.body.classList.contains("voice-mode"))), "a typed turn leaves voice mode");
+        expect(await p.isVisible("#conversation"), "conversation visible after typing");
+        expect(!errors.length, "page errors: " + errors.join("; "));
+      } finally {
+        await b.close();
+      }
+      return "orb 150px centered, chat hidden, typed context to Live; Chat/orb/typing back to chat with voice turns; bubble on reply and error";
+    });
     await check("browser: apps open, back closes, session survives", async () => {
       const { chromium } = await playwright();
       const b = await chromium.launch();
