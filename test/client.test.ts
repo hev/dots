@@ -540,3 +540,165 @@ test("the configurator's script parses, and its options can't close the script t
   assert.doesNotMatch(html, /javascript:x/);
   assert.doesNotMatch(html, /"color":"red"/);
 });
+
+// Voice ↔ chat: voice mode is on from the tap until voice stops, for any reason; the chat underneath keeps every turn.
+const conv = (b: ReturnType<typeof boot>) => b.$("#conversation").children as any[];
+const voiceOn = (b: ReturnType<typeof boot>) => b.doc.body.classList.contains("voice-mode");
+async function live(b: ReturnType<typeof boot>, s: any, m: unknown) { await s.onmessage({ data: JSON.stringify(m) }); await b.tick(); }
+function voiceScreen(extra: Record<string, (body: any, url: string) => { status?: number; json: unknown }> = {}) {
+  sockets.length = 0;
+  const n = net({ "/api/token": () => ({ json: { token: "t", model: "m" } }), "/api/chat": (body) => ({ json: { reply: "typed: " + body.text } }), ...extra });
+  return { n, b: boot({ name: "me" }, { fetch: n.fetch, WebSocket: FakeSocket, AudioContext: FakeAudio }) };
+}
+
+test("voice mode: on from the tap, voice turns land in the conversation underneath, Chat or the orb ends it cleanly", async () => {
+  const { b } = voiceScreen();
+  assert.ok(!voiceOn(b), "chat is the default");
+  await b.$("#dot").onclick();
+  await b.tick();
+  assert.ok(voiceOn(b), "connecting is voice mode");
+  assert.equal(b.$("#dot").attrs["aria-label"], "Stop voice");
+  const s = sockets[0];
+  s.onopen();
+  await live(b, s, { setupComplete: {} });
+  assert.ok(b.$("#dot").classList.contains("on"));
+  await live(b, s, { serverContent: { inputTranscription: { text: "what's on today" } } });
+  await live(b, s, { serverContent: { outputTranscription: { text: "Two meetings." }, turnComplete: true } });
+  assert.deepEqual(conv(b).map((c) => [c.className, c.text]), [["m u", "what's on today"], ["m d", "Two meetings."]], "voice turns kept in the chat");
+  b.$("#toChat").onclick();
+  assert.ok(!voiceOn(b), "Chat leaves voice mode");
+  assert.equal(s.readyState, 3, "the socket closed");
+  assert.equal(b.$("#dot").attrs["aria-label"], "Start voice");
+  await b.tick();
+  assert.ok(!voiceOn(b) && b.$("#status").text === "Ready to chat", "the late close changes nothing");
+  assert.equal(conv(b).length, 2, "the thread is all there");
+  // and the orb: tap in, tap out
+  await b.$("#dot").onclick();
+  await b.tick();
+  sockets[1].onopen();
+  await live(b, sockets[1], { setupComplete: {} });
+  await b.$("#dot").onclick();
+  assert.ok(!voiceOn(b));
+  assert.equal(sockets[1].readyState, 3);
+});
+
+test("voice mode ends on an unexpected close, on a typed turn, and on a failed wake", async () => {
+  const { b } = voiceScreen();
+  await b.$("#dot").onclick();
+  await b.tick();
+  sockets[0].onopen();
+  await live(b, sockets[0], { setupComplete: {} });
+  sockets[0].onclose({ code: 1011 });
+  assert.ok(!voiceOn(b), "a lost line goes back to chat");
+  await b.$("#dot").onclick();
+  await b.tick();
+  assert.ok(voiceOn(b));
+  b.$("#type").value = "typed instead";
+  await b.$("#type").onkeydown({ key: "Enter" });
+  assert.ok(!voiceOn(b), "a typed turn leaves voice mode");
+  assert.equal(conv(b).at(-1).text, "typed: typed instead");
+  const failed = voiceScreen({ "/api/token": () => ({ status: 500, json: { error: "no voice" } }) });
+  await failed.b.$("#dot").onclick();
+  await failed.b.tick();
+  assert.ok(!voiceOn(failed.b), "a failed wake goes back to chat");
+});
+
+test("a late token can't re-enter voice mode after a switch to chat", async () => {
+  sockets.length = 0;
+  let release!: (v: any) => void;
+  const b = boot({ name: "me" }, { AudioContext: FakeAudio, WebSocket: FakeSocket, fetch: (url: string) => url.includes("/token") ? new Promise((r) => { release = r; }) : Promise.resolve({ ok: false, status: 404, json: async () => ({}) }) });
+  await b.$("#dot").onclick();
+  assert.ok(voiceOn(b));
+  await b.$("#dot").onclick();
+  assert.ok(!voiceOn(b), "tapping while connecting stops");
+  release({ status: 200, json: async () => ({ token: "t", model: "m" }) });
+  await b.tick(); await b.tick();
+  assert.equal(sockets.length, 0);
+  assert.ok(!voiceOn(b));
+});
+
+test("typed turns before a tap go to the Live session as context, once per handoff", async () => {
+  const { b } = voiceScreen();
+  b.$("#type").value = "plan my week";
+  await b.$("#type").onkeydown({ key: "Enter" });
+  await b.$("#dot").onclick();
+  await b.tick();
+  sockets[0].onopen();
+  await live(b, sockets[0], { setupComplete: {} });
+  const ctx = sockets[0].sent.filter((x: string) => x.includes("clientContent"));
+  assert.equal(ctx.length, 1);
+  assert.match(ctx[0], /the user: plan my week\\nYou: typed: plan my week/);
+  b.$("#toChat").onclick();
+  await b.$("#dot").onclick();
+  await b.tick();
+  sockets[1].onopen();
+  await live(b, sockets[1], { setupComplete: {} });
+  assert.equal(sockets[1].sent.filter((x: string) => x.includes("clientContent")).length, 0, "nothing new typed, nothing sent");
+});
+
+/** A /chat whose NDJSON stream the test feeds line by line. */
+function streamed() {
+  let push!: (line: unknown) => void, end!: () => void, fail!: (e: Error) => void;
+  const lines: { value?: Uint8Array; done: boolean; err?: Error }[] = []; let wake: (() => void) | null = null;
+  const add = (x: (typeof lines)[0]) => { lines.push(x); wake?.(); };
+  push = (l) => add({ value: new TextEncoder().encode(JSON.stringify(l) + "\n"), done: false });
+  end = () => add({ done: true }); fail = (e) => add({ done: true, err: e });
+  const reader = { read: async (): Promise<any> => { while (!lines.length) await new Promise<void>((r) => (wake = r)); const x = lines.shift()!; if (x.err) throw x.err; return x; } };
+  const fetch = async (url: string) => url.endsWith("/chat") ? { ok: true, status: 200, body: { getReader: () => reader } } : { ok: false, status: 404, json: async () => ({}) };
+  return { fetch, push, end, fail };
+}
+const bubble = (b: ReturnType<typeof boot>) => conv(b).find((c) => c.className === "m d thinking");
+
+test("a typed turn shows a thinking bubble in the conversation, live progress on it, gone with the reply", async () => {
+  const s = streamed();
+  const b = boot({ name: "me", labels: { spend: "your spending" } }, { fetch: s.fetch });
+  b.$("#type").value = "how much this month";
+  const sent = b.$("#type").onkeydown({ key: "Enter" });
+  await b.tick();
+  const th = bubble(b);
+  assert.ok(th, "the bubble is up while /chat is out");
+  assert.equal(conv(b).at(-1), th, "under the user's turn");
+  assert.equal(th._label.text, "Thinking…");
+  assert.equal(th.attrs.role, "status");
+  assert.equal(b.$("#conversation").scrollTop, 1e9, "scrolled into view");
+  s.push({ slow: "spend" });
+  await b.tick();
+  assert.equal(th._label.text, "Checking your spending…");
+  s.push({ reply: "About $40." });
+  s.end();
+  await sent;
+  assert.equal(bubble(b), undefined, "gone with the reply");
+  assert.deepEqual(conv(b).map((c) => c.text), ["how much this month", "About $40."]);
+});
+
+test("the thinking bubble goes on an error, a failed request, a new thread and a switch to voice", async () => {
+  for (const how of ["error", "throw", "clear", "voice"] as const) {
+    sockets.length = 0;
+    const s = streamed();
+    const fetch = (url: string) => url.includes("/token") ? Promise.resolve({ status: 200, json: async () => ({ token: "t", model: "m" }) }) : how === "throw" && url.endsWith("/chat") ? Promise.reject(new Error("offline")) : s.fetch(url);
+    const b = boot({ name: "me" }, { fetch, WebSocket: FakeSocket, AudioContext: FakeAudio });
+    b.$("#type").value = "hello";
+    const sent = b.$("#type").onkeydown({ key: "Enter" });
+    await b.tick();
+    if (how !== "throw") assert.ok(bubble(b), how + ": up");
+    if (how === "error") { s.push({ error: "model down" }); s.end(); await b.tick(); }
+    if (how === "clear") b.$("#newThread").onclick();
+    if (how === "voice") { await b.$("#dot").onclick(); assert.ok(voiceOn(b)); }
+    assert.equal(bubble(b), undefined, how + ": gone");
+    if (how === "clear" || how === "voice") { s.push({ reply: "late" }); s.end(); }
+    await sent;
+    assert.equal(bubble(b), undefined, how + ": still gone");
+    assert.ok(!conv(b).some((c) => c.text === "late"), how + ": a superseded reply isn't drawn");
+    if (how === "error" || how === "throw") assert.equal(b.$("#type").value, "hello", how + ": draft kept");
+  }
+});
+
+test("the voice-mode layout restores the big orb and hides the chat; the bubble respects reduced motion", () => {
+  const html = screen({ name: "me" });
+  assert.match(html, /body\.voice-mode #dot\{width:150px;height:150px/);
+  assert.match(html, /body\.voice-mode \.voiceLabel\{display:none\}/);
+  assert.match(html, /body\.voice-mode #conversation:not\(:has\(>\.approval:not\(\.done\)\)\)\{display:none\}/);
+  assert.match(html, /body\.voice-mode #you,body\.voice-mode #say\{display:block/);
+  assert.match(html, /<button id="toChat" aria-label="Back to chat"/);
+  assert.match(html, /prefers-reduced-motion:reduce\)\{[^}]*\}[^@]*\.thinking \.dots i\{opacity:\.6\}/);
+});
